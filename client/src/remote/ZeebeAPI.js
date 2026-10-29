@@ -96,6 +96,17 @@ export default class ZeebeAPI {
     });
   }
 
+  searchChildProcessInstances(options, parentProcessInstanceKey) {
+    let { endpoint } = options;
+
+    endpoint = getEndpointForTargetType(endpoint);
+
+    return this._backend.send('zeebe:searchProcessInstances', {
+      endpoint,
+      parentProcessInstanceKey
+    });
+  }
+
   searchElementInstances(options, processInstanceKey) {
     let { endpoint } = options;
 
@@ -159,6 +170,86 @@ export default class ZeebeAPI {
     return this._backend.send('zeebe:searchUserTasks', {
       endpoint,
       processInstanceKey
+    });
+  }
+
+  getAuthorizations(options, resourceType, page) {
+    let { endpoint } = options;
+
+    endpoint = getEndpointForTargetType(endpoint);
+
+    return this._backend.send('zeebe:getAuthorizations', {
+      endpoint,
+      resourceType,
+      ...(page ? { page } : {})
+    });
+  }
+
+  evaluateExpression(options, expression, variables) {
+    let { endpoint } = options;
+
+    endpoint = getEndpointForTargetType(endpoint);
+
+    return this._backend.send('zeebe:evaluateExpression', {
+      endpoint,
+      expression,
+      variables
+    });
+  }
+
+  searchClusterVariables(options, filter, page) {
+    let { endpoint } = options;
+
+    endpoint = getEndpointForTargetType(endpoint);
+
+    return this._backend.send('zeebe:searchClusterVariables', {
+      endpoint,
+      filter,
+      ...(page ? { page } : {})
+    });
+  }
+
+  getClusterVariable(options, name) {
+    let { endpoint } = options;
+
+    endpoint = getEndpointForTargetType(endpoint);
+
+    return this._backend.send('zeebe:getClusterVariable', {
+      endpoint,
+      name
+    });
+  }
+
+  createClusterVariable(options, variable) {
+    let { endpoint } = options;
+
+    endpoint = getEndpointForTargetType(endpoint);
+
+    return this._backend.send('zeebe:createClusterVariable', {
+      endpoint,
+      variable
+    });
+  }
+
+  updateClusterVariable(options, name, variable) {
+    let { endpoint } = options;
+
+    endpoint = getEndpointForTargetType(endpoint);
+
+    return this._backend.send('zeebe:updateClusterVariable', {
+      endpoint,
+      name,
+      variable
+    });
+  }
+
+  listSecrets(options) {
+    let { endpoint } = options;
+
+    endpoint = getEndpointForTargetType(endpoint);
+
+    return this._backend.send('zeebe:listSecrets', {
+      endpoint
     });
   }
 }
@@ -236,6 +327,7 @@ export function getEndpointForTargetType(endpoint) {
       url: camundaCloudClusterUrl,
       clientId: camundaCloudClientId,
       clientSecret: camundaCloudClientSecret,
+      tenantId
     };
   }
 

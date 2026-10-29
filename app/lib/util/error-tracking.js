@@ -12,7 +12,7 @@ const os = require('os');
 
 const log = require('../log')('app:error-tracking');
 
-const { RewriteFrames } = require('@sentry/integrations');
+const { createThrottler } = require('./error-tracking-throttler');
 
 const PRIVACY_PREFERENCES_CONFIG_KEY = 'editor.privacyPreferences';
 const EDITOR_ID_CONFIG_KEY = 'editor.id';
@@ -116,8 +116,9 @@ function initializeSentry(Sentry, editorID, release, dsn) {
     Sentry.init({
       dsn,
       release,
+      beforeSend: createThrottler(),
       integrations: [
-        new RewriteFrames({
+        Sentry.rewriteFramesIntegration({
           iteratee: (frame) => {
             if (!frame.filename) {
               return frame;

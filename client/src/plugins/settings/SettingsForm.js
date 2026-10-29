@@ -15,6 +15,7 @@ import { Field, Form, useFormikContext, getIn } from 'formik';
 import { map, forEach, sortBy, isString, isObject } from 'min-dash';
 
 import { Section, TextInput, CheckBox, Select, Radio } from '../../shared/ui';
+import DocumentationIcon from '../../shared/ui/form/DocumentationIcon';
 
 import Flags from '../../util/Flags';
 
@@ -62,24 +63,31 @@ export function SettingsForm({ schema, onChange, targetElement }) {
         // Render each section
         forEach(value.sections, (section, sectionId) => {
           const sectionProperties = propertiesBySection[sectionId] || {};
-          result.push(
-            <SettingsSection
-              key={ `${key}-${sectionId}` }
-              title={ section.title }
-              description={ section.description }
-              properties={ sectionProperties }
-              targetElement={ targetElement }
-            />
-          );
+          result.push({
+            order: section.order ?? value.order,
+            element: (
+              <SettingsSection
+                key={ `${key}-${sectionId}` }
+                title={ section.title }
+                description={ section.description }
+                documentationUrl={ section.documentationUrl }
+                properties={ sectionProperties }
+                targetElement={ targetElement }
+              />
+            )
+          });
         });
       } else {
 
         // Otherwise render as a single section
-        result.push(<SettingsSection id={ key } key={ key } { ...value } targetElement={ targetElement } />);
+        result.push({
+          order: value.order,
+          element: <SettingsSection id={ key } key={ key } { ...value } targetElement={ targetElement } />
+        });
       }
     });
 
-    return result;
+    return sortBy(result, ({ order }) => order ?? 9999).map(({ element }) => element);
   }, [ orderedSchema ]);
 
   return (<Form>
@@ -89,11 +97,11 @@ export function SettingsForm({ schema, onChange, targetElement }) {
 
 function SettingsSection(props) {
 
-  const { title, description, id, properties } = props;
+  const { title, description, documentationUrl, id, properties } = props;
 
   return (
     <Section id={ id }>
-      <Section.Header>{ title }</Section.Header>
+      <Section.Header>{ title }<DocumentationIcon url={ documentationUrl } /></Section.Header>
       <Section.Body>
         { description && <p className="section__description">{ description }</p> }
         {
@@ -107,7 +115,7 @@ function SettingsSection(props) {
 
 export function SettingsField(props) {
 
-  const { type, flag, condition, name } = props;
+  const { type, flag, condition, name, hidden } = props;
 
   const { values } = useFormikContext();
 
@@ -116,6 +124,10 @@ export function SettingsField(props) {
   }, [ flag ]);
 
   const FieldComponent = useMemo(() => {
+    if (hidden) {
+      return null;
+    }
+
     if (condition && !isConditionMet(name, values, condition)) {
       return null;
     }
@@ -141,7 +153,7 @@ export function SettingsField(props) {
     }
 
     return null;
-  }, [ condition, name, type, values ]);
+  }, [ condition, hidden, name, type, values ]);
 
   if (!FieldComponent) {
     return null;

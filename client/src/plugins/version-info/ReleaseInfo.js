@@ -47,20 +47,16 @@ export function ReleaseInfo(props) {
     <div className={ css.ReleaseInfo }>
       <ul className="dashed">
         <li>
-          <h4>Execution listener headers</h4>
-          Execution listeners now support headers configuration in the properties panel and via element templates.
+          <h4>FEEL expression playground</h4>
+          The FEEL popup editor includes now a playground which allows to evaluate an expression against the connected Camunda instance.
         </li>
         <li>
-          <h4>Improved canvas interactions</h4>
-          Lasso-selected elements now show a clear outline of selected elements. Enclosed artifacts are moved together with participants and sub-processes.
+          <h4>Credential secrets from your cluster</h4>
+          Secret fields now list the secrets available on the connected cluster and warn about missing or plain-text values. Cluster connections are now called connections, and Cluster URL is now Connection URL.
         </li>
         <li>
-          <h4>Version mismatch warnings</h4>
-          A warning is shown when the selected Camunda version differs from the connected cluster version.
-        </li>
-        <li>
-          <h4>JSON editor for example data</h4>
-          The example data input now uses a dedicated JSON editor with syntax and error highlighting.
+          <h4>Change an applied element template</h4>
+          Applied element templates can now be changed from the Applied dropdown, without unlinking first.
         </li>
         <li>
           <h4>Bug fixes and more</h4>

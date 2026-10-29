@@ -15,11 +15,12 @@ import { getOperateBaseUrl, getTasklistBaseUrl } from '../../../../../zeebe/util
 const log = debug('TaskTestingApi');
 
 export default class TaskTestingApi {
-  constructor(deployment, startInstance, zeebeApi, tab, onAction) {
+  constructor(deployment, startInstance, zeebeApi, tab, onAction, emit) {
     this._deployment = deployment;
     this._startInstance = startInstance;
     this._zeebeApi = zeebeApi;
     this._onAction = onAction;
+    this._emit = emit;
     this._tab = tab;
   }
 
@@ -28,6 +29,7 @@ export default class TaskTestingApi {
       deploy: this.deploy.bind(this),
       startInstance: this.startInstance.bind(this),
       getProcessInstance: this.getProcessInstance.bind(this),
+      getChildProcessInstances: this.getChildProcessInstances.bind(this),
       getProcessInstanceVariables: this.getProcessInstanceVariables.bind(this),
       getProcessInstanceElementInstances: this.getProcessInstanceElementInstances.bind(this),
       getProcessInstanceIncident: this.getProcessInstanceIncident.bind(this),
@@ -95,9 +97,12 @@ export default class TaskTestingApi {
 
     if (!result.success) {
       log('Deployment failed: ', result);
+
+      const { detail, message } = result.response || {};
+
       return {
         success: false,
-        error: result?.response?.message || 'Deployment failed'
+        error: detail || message || 'Deployment failed'
       };
     }
 
@@ -125,6 +130,17 @@ export default class TaskTestingApi {
       ]
     });
 
+    if (!response.success) {
+      log('Start instance failed: ', response);
+
+      const { detail, message } = response.response || {};
+
+      return {
+        success: false,
+        error: detail || message || 'Failed to start process instance'
+      };
+    }
+
     log('Start instance successful: ', response);
     return response;
   }
@@ -133,6 +149,12 @@ export default class TaskTestingApi {
     const config = await this.getDeploymentConfig();
 
     return this._zeebeApi.searchProcessInstances(config, processInstanceKey);
+  }
+
+  async getChildProcessInstances(processInstanceKey) {
+    const config = await this.getDeploymentConfig();
+
+    return this._zeebeApi.searchChildProcessInstances(config, processInstanceKey);
   }
 
   async getProcessInstanceVariables(processInstanceKey) {
@@ -174,21 +196,15 @@ export default class TaskTestingApi {
   _handleDeployment({ context, deploymentResult, endpoint }) {
 
     if (deploymentResult.success) {
-      this._onAction('emit-event', {
-        type: 'deployment.done',
-        payload: {
-          context,
-          targetType: endpoint?.targetType,
-        }
+      this._emit('deployment.done', {
+        context,
+        targetType: endpoint?.targetType,
       });
     } else {
-      this._onAction('emit-event', {
-        type: 'deployment.error',
-        payload: {
-          context,
-          error: deploymentResult?.response,
-          targetType: endpoint?.targetType,
-        }
+      this._emit('deployment.error', {
+        context,
+        error: deploymentResult?.response,
+        targetType: endpoint?.targetType,
       });
     }
   }

@@ -39,6 +39,16 @@ const { spy } = sinon;
 
 describe('<AppParent>', function() {
 
+  it('should render within the design system provider', function() {
+
+    // when
+    const { container } = createAppParent();
+
+    // then
+    expect(container.querySelector('[data-c4-scope]')).to.exist;
+  });
+
+
   describe('keyboard bindings', function() {
 
     function setup() {
@@ -412,6 +422,80 @@ describe('<AppParent>', function() {
   });
 
 
+  describe('menu action', function() {
+
+    it('should emit application event for <emit-event>', function() {
+
+      // given
+      const backend = new Backend();
+
+      const {
+        instance
+      } = createAppParent({ globals: { backend } });
+
+      const app = instance.getApp();
+      const emitSpy = spy(app, 'emitEvent');
+
+      // when
+      backend.receive('menu:action', null, 'emit-event', {
+        type: 'versionInfo.open',
+        payload: { foo: 'bar' }
+      });
+
+      // then
+      expect(emitSpy).to.have.been.calledWith('versionInfo.open', { foo: 'bar' });
+    });
+
+
+    it('should trigger action for other actions', function() {
+
+      // given
+      const backend = new Backend();
+
+      const {
+        instance
+      } = createAppParent({ globals: { backend } });
+
+      const app = instance.getApp();
+      const actionSpy = spy(app, 'triggerAction');
+
+      // when
+      backend.receive('menu:action', null, 'undo', { foo: 'bar' });
+
+      // then
+      expect(actionSpy).to.have.been.calledWith('undo', { foo: 'bar' });
+    });
+
+
+    it('should handle error thrown while emitting', function() {
+
+      // given
+      const backend = new Backend();
+
+      const {
+        instance
+      } = createAppParent({ globals: { backend } });
+
+      const app = instance.getApp();
+
+      const error = new Error('emit failed');
+
+      sinon.stub(app, 'emitEvent').throws(error);
+
+      const handleErrorStub = sinon.stub(instance, 'handleError');
+
+      // when
+      backend.receive('menu:action', null, 'emit-event', {
+        type: 'versionInfo.open'
+      });
+
+      // then
+      expect(handleErrorStub).to.have.been.calledWith(error);
+    });
+
+  });
+
+
   describe('trigger action', function() {
 
     describe('quit', function() {
@@ -669,7 +753,7 @@ describe('<AppParent>', function() {
 
   describe('backend errors', function() {
 
-    it('should log backend error', function(done) {
+    it('should log backend error', async function() {
 
       // given
       const message = 'message from backend';
@@ -686,13 +770,11 @@ describe('<AppParent>', function() {
       backend.receive('backend:error', {}, message);
 
       // then
-      setTimeout(() => {
+      await waitFor(() => {
         expect(actionSpy).to.be.calledWith('log', {
           message,
           category: 'error'
         });
-
-        done();
       });
 
     });
@@ -1160,6 +1242,45 @@ describe('<AppParent>', function() {
       const app = instance.getApp();
 
       expect(app.state.logEntries).to.have.length(0);
+    });
+
+
+    it('should log plugin errors', function(done) {
+
+      // given
+      const backend = new Backend({
+        sendReady: async () => backend.receive('client:started')
+      });
+
+      const plugins = new Plugins({
+        getErrors: () => [ 'Plug-in <foo> uses `vendor.carbonReact`.' ]
+      });
+
+      // when
+      const { instance } = createAppParent({
+        globals: {
+          backend,
+          plugins
+        },
+        onStarted: async () => {
+          try {
+            const app = instance.getApp();
+
+            // then
+            await waitFor(() => {
+              expect(app.state.logEntries).to.eql([
+                { category: 'error', message: 'Plug-in <foo> uses `vendor.carbonReact`.' }
+              ]);
+
+              expect(app.state.layout.panel).to.include({ open: true, tab: 'log' });
+            });
+
+            done();
+          } catch (error) {
+            done(error);
+          }
+        }
+      });
     });
 
   });

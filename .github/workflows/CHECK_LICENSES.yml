@@ -16,18 +16,26 @@ jobs:
   analyze:
     name: Analyze dependencies
     runs-on: ubuntu-latest
+    # Requires the FOSSA API key from Vault, which is not available to
+    # forked pull requests; skip the job there so external contributions
+    # still get a green check suite.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
+      id-token: write # Vault OIDC/JWT auth
     timeout-minutes: 10
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     # Import FOSSA_API_KEY from Vault
     - name: Import Secrets
       id: secrets
       uses: hashicorp/vault-action@v4.0.0
       with:
         url: ${{ secrets.VAULT_ADDR }}
-        method: approle
-        roleId: ${{ secrets.VAULT_ROLE_ID }}
-        secretId: ${{ secrets.VAULT_SECRET_ID }}
+        method: jwt
+        role: ${{ secrets.VAULT_JWT_ROLE }}
+        path: ${{ secrets.VAULT_JWT_PATH }}
+        jwtGithubAudience: ${{ secrets.VAULT_JWT_AUDIENCE }}
         exportEnv: false
         secrets: |
           secret/data/products/desktop-modeler/ci/fossa FOSSA_API_KEY;

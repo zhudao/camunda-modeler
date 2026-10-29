@@ -12,7 +12,7 @@ import { expect } from 'chai';
 import * as sinon from 'sinon';
 import React, { createRef, Component } from 'react';
 
-import { render, waitFor, screen } from '@testing-library/react';
+import { act, render, waitFor, screen } from '@testing-library/react';
 
 import {
   App,
@@ -142,6 +142,32 @@ describe('<App>', function() {
         });
 
         expect(updateMenuSpy).to.have.been.called;
+      });
+
+
+      it('on tab file path change (e.g. save as)', async function() {
+
+        // given
+        const updateMenuSpy = spy();
+
+        const { app } = createApp({
+          onMenuUpdate: updateMenuSpy
+        });
+
+        const [ tab ] = await app.openFiles([ createFile('1.bpmn') ]);
+
+        updateMenuSpy.resetHistory();
+
+        // when
+        // simulate saving the tab to a different location
+        app.tabSaved(tab, createFile('1.bpmn', { path: '/other/folder/1.bpmn' }));
+
+        // then
+        await waitFor(() => {
+          expect(updateMenuSpy).to.have.been.calledWith(sinon.match({
+            tabs: app.state.tabs
+          }));
+        });
       });
 
     });
@@ -336,6 +362,69 @@ describe('<App>', function() {
       ]);
 
       expect(activeTab).to.eql(tabs[ tabs.length - 1 ]);
+    });
+
+  });
+
+
+  describe('#setTabGroups', function() {
+
+    it('should replace tab groups', async function() {
+
+      // given
+      const { app } = createApp();
+
+      // when
+      await app.triggerAction('set-tab-groups', { a: 'group-1', b: 'group-1' });
+
+      // then
+      await waitFor(() => {
+        expect(app.state.tabGroups).to.eql({ a: 'group-1', b: 'group-1' });
+      });
+    });
+
+
+    it('should replace wholesale, dropping stale entries', async function() {
+
+      // given
+      const { app } = createApp();
+
+      await app.triggerAction('set-tab-groups', { a: 'group-1', b: 'group-1' });
+
+      await waitFor(() => {
+        expect(app.state.tabGroups).to.eql({ a: 'group-1', b: 'group-1' });
+      });
+
+      // when
+      await app.triggerAction('set-tab-groups', { a: 'group-1' });
+
+      // then
+      await waitFor(() => {
+        expect(app.state.tabGroups).to.eql({ a: 'group-1' });
+      });
+    });
+
+
+    it('should not re-render when tab groups are unchanged', async function() {
+
+      // given
+      const { app } = createApp();
+
+      await app.triggerAction('set-tab-groups', { a: 'group-1', b: 'group-1' });
+
+      await waitFor(() => {
+        expect(app.state.tabGroups).to.eql({ a: 'group-1', b: 'group-1' });
+      });
+
+      const renderSpy = spy(app, 'render');
+
+      // when
+      await app.triggerAction('set-tab-groups', { a: 'group-1', b: 'group-1' });
+
+      await act(async () => {});
+
+      // then
+      expect(renderSpy).not.to.have.been.called;
     });
 
   });
@@ -1546,6 +1635,27 @@ describe('<App>', function() {
     });
 
 
+    it('should NOT auto-save discarded tab on close', async function() {
+
+      // given
+      const file = createFile('diagram_1.bpmn');
+      const [ tab ] = await app.openFiles([ file ]);
+
+      // mark as dirty
+      app.setState(app.setDirty(tab));
+      await waitFor(() => expect(app.isDirty(tab)).to.be.true);
+
+      // user chooses to discard the unsaved changes when closing
+      dialog.setShowCloseFileDialogResponse({ button: 'discard' });
+
+      // when
+      await app.closeTab(tab);
+
+      // then: the discarded changes must NOT be written back to the file
+      expect(writeFileSpy).not.to.have.been.called;
+    });
+
+
     it('should handle auto-save on window blur', async function() {
 
       // given
@@ -1561,6 +1671,27 @@ describe('<App>', function() {
 
       // then
       expect(writeFileSpy).to.have.been.calledOnce;
+    });
+
+
+    it('should NOT auto-save on window blur while a dialog is open', async function() {
+
+      // given
+      const file = createFile('diagram_1.bpmn');
+      const [ tab ] = await app.openFiles([ file ]);
+
+      // mark as dirty
+      app.setState(app.setDirty(tab));
+      await waitFor(() => expect(app.isDirty(tab)).to.be.true);
+
+      // a dialog opened by the app is blurring the window
+      dialog.isDialogOpen = () => true;
+
+      // when
+      await app.triggerAction('window-blurred');
+
+      // then
+      expect(writeFileSpy).not.to.have.been.called;
     });
 
 
@@ -2220,16 +2351,17 @@ describe('<App>', function() {
 
     describe('should catch', function() {
 
-      const errorHandler = window.onerror;
+      let errorHandler;
 
       before(function() {
+        errorHandler = window.onerror;
 
         // disable mocha implicit error handling
         window.onerror = () => {};
       });
 
       after(function() {
-        window.onError = errorHandler;
+        window.onerror = errorHandler;
       });
 
 
@@ -2747,7 +2879,9 @@ describe('<App>', function() {
         expect(getByText(newTitle)).to.exist;
       });
 
-      expect(queryByText('test')).to.not.exist;
+      await waitFor(() => {
+        expect(queryByText('test')).to.not.exist;
+      });
     });
 
 
@@ -2836,7 +2970,7 @@ describe('<App>', function() {
       await findByText('test-notification-3');
 
       // when
-      await app.triggerAction('emit-event', { type: 'tab.activeSheetChanged' });
+      await app.emitEvent('tab.activeSheetChanged');
 
       // then
       await waitFor(() => {
@@ -2912,7 +3046,7 @@ describe('<App>', function() {
     });
 
 
-    it('should notify if content changed', async function() {
+    it('should reload without notifying if not dirty', async function() {
 
       // given
       const showSpy = spy(_ => {
@@ -2936,7 +3070,130 @@ describe('<App>', function() {
 
       const tab = openedTabs[0];
 
-      const lastModified = new Date().getMilliseconds();
+      const lastModified = Date.now();
+
+      updateFileStats(tab.file, { lastModified }, fileSystem);
+
+      // when
+      const updatedTab = await app.checkFileChanged(tab);
+
+      // then
+      expect(showSpy).to.not.have.been.called;
+      expect(readFileSpy).to.have.been.called;
+
+      await waitFor(() => {
+        expect(updatedTab).to.eql(app.findOpenTab(file1));
+      });
+
+      expect(updatedTab.file.contents).to.eql(NEW_FILE_CONTENTS);
+
+      // TODO(nikku): fix test suite and properly pass last modified
+      // expect(updatedTab.file.lastModified).to.eql(lastModified);
+
+      expect(app.isUnsaved(updatedTab)).to.be.false;
+    });
+
+
+    it('should reset the editor cache when reloading a background tab', async function() {
+
+      // given
+      const cache = new Cache();
+
+      const destroySpy = sinon.spy(cache, 'destroy');
+
+      const { app } = createApp({
+        cache,
+        globals: {
+          fileSystem
+        }
+      });
+
+      // file2 is opened last, so file1's tab stays in the background
+      const openedTabs = await app.openFiles([ file1, file2 ]);
+
+      const backgroundTab = openedTabs[0];
+
+      const lastModified = Date.now();
+
+      updateFileStats(backgroundTab.file, { lastModified }, fileSystem);
+
+      // when
+      const updatedTab = await app.checkFileChanged(backgroundTab);
+
+      // then
+      // the stale cache is dropped so the tab re-imports the external contents
+      // once it is re-activated
+      expect(destroySpy).to.have.been.calledWith(backgroundTab.id);
+
+      expect(updatedTab.file.contents).to.eql(NEW_FILE_CONTENTS);
+      expect(app.isUnsaved(updatedTab)).to.be.false;
+    });
+
+
+    it('should NOT reset the editor cache when reloading the active tab', async function() {
+
+      // given
+      const cache = new Cache();
+
+      const { app } = createApp({
+        cache,
+        globals: {
+          fileSystem
+        }
+      });
+
+      const openedTabs = await app.openFiles([ file1, file2 ]);
+
+      const tab = openedTabs[0];
+
+      // make file1's tab the active one
+      await app.showTab(tab);
+
+      const destroySpy = sinon.spy(cache, 'destroy');
+
+      const lastModified = Date.now();
+
+      updateFileStats(tab.file, { lastModified }, fileSystem);
+
+      // when
+      await app.checkFileChanged(tab);
+
+      // then
+      // the active tab stays mounted and re-imports through its update cycle,
+      // so its live cache must be kept
+      expect(destroySpy).not.to.have.been.called;
+    });
+
+
+    it('should notify if content changed and tab is dirty', async function() {
+
+      // given
+      const showSpy = spy(_ => {
+        return {
+          button: 'ok'
+        };
+      });
+
+      const dialog = new Dialog({
+        show: showSpy
+      });
+
+      const { app } = createApp({
+        globals: {
+          dialog,
+          fileSystem
+        }
+      });
+
+      const openedTabs = await app.openFiles([ file1, file2 ]);
+
+      const tab = openedTabs[0];
+
+      app.setState(app.setDirty(tab));
+
+      await waitFor(() => expect(app.isDirty(tab)).to.be.true);
+
+      const lastModified = Date.now();
 
       updateFileStats(tab.file, { lastModified }, fileSystem);
 
@@ -3043,7 +3300,11 @@ describe('<App>', function() {
 
       const tab = openedTabs[0];
 
-      const lastModified = new Date().getMilliseconds();
+      app.setState(app.setDirty(tab));
+
+      await waitFor(() => expect(app.isDirty(tab)).to.be.true);
+
+      const lastModified = Date.now();
 
       updateFileStats(tab.file, { lastModified }, fileSystem);
 
@@ -3083,6 +3344,49 @@ describe('<App>', function() {
 
       // then
       expect(checkFileChangedSpy).to.have.been.calledOnce;
+    });
+
+
+    it('should check for changes on window focus', async function() {
+
+      // given
+      const { app } = createApp({
+        globals: { fileSystem }
+      });
+
+      await app.openFiles([ file1 ]);
+
+      const checkFileChangedSpy = spy(app, 'checkFileChanged');
+
+      // when
+      await app.triggerAction('window-focused');
+
+      // then
+      expect(checkFileChangedSpy).to.have.been.called;
+    });
+
+
+    it('should NOT check for changes on window focus while a dialog is open', async function() {
+
+      // given
+      const dialog = new Dialog();
+
+      const { app } = createApp({
+        globals: { dialog, fileSystem }
+      });
+
+      await app.openFiles([ file1 ]);
+
+      const checkFileChangedSpy = spy(app, 'checkFileChanged');
+
+      // a dialog opened by the app is (re-)focusing the window
+      dialog.isDialogOpen = () => true;
+
+      // when
+      await app.triggerAction('window-focused');
+
+      // then
+      expect(checkFileChangedSpy).to.not.have.been.called;
     });
 
   });
@@ -3569,6 +3873,102 @@ describe('<App>', function() {
       expect(getConfigSpy).to.be.calledOnceWith('foo');
     });
 
+
+    it('should get config for the active tab file', async function() {
+
+      // given
+      const getConfigSpy = spy();
+
+      const config = new Config({
+        get: getConfigSpy
+      });
+
+      const { app } = createApp({
+        globals: {
+          config
+        }
+      });
+
+      const file = { path: '/some/dir/diagram.bpmn' };
+
+      app.state.activeTab = { id: 'tab-1', file };
+
+      getConfigSpy.resetHistory();
+
+      // when
+      app.getConfig('foo');
+
+      // then
+      // the active tab's file is forwarded so file-scoped config
+      // (e.g. local element templates) resolves against it
+      expect(getConfigSpy).to.be.calledOnceWith('foo', file);
+    });
+
+  });
+
+
+  describe('#getConfigForFile', function() {
+
+    afterEach(sinon.restore);
+
+
+    it('should get config for the given file', function() {
+
+      // given
+      const getConfigSpy = spy();
+
+      const config = new Config({
+        get: getConfigSpy
+      });
+
+      const { app } = createApp({
+        globals: {
+          config
+        }
+      });
+
+      const file = { path: '/some/dir/diagram.bpmn' };
+
+      getConfigSpy.resetHistory();
+
+      // when
+      app.getConfigForFile('foo', file, 'bar');
+
+      // then
+      // the passed file is forwarded, independent from the active tab
+      expect(getConfigSpy).to.be.calledOnceWith('foo', file, 'bar');
+    });
+
+
+    it('should be callable when detached from the app', function() {
+
+      // given
+      const getConfigSpy = spy();
+
+      const config = new Config({
+        get: getConfigSpy
+      });
+
+      const { app } = createApp({
+        globals: {
+          config
+        }
+      });
+
+      getConfigSpy.resetHistory();
+
+      // when
+      // consumers (e.g. the linter) receive it as a bare callback
+      const getConfigForFile = app.getConfigForFile;
+
+      const file = { path: '/some/dir/diagram.bpmn' };
+
+      getConfigForFile('foo', file);
+
+      // then
+      expect(getConfigSpy).to.be.calledOnceWith('foo', file);
+    });
+
   });
 
 
@@ -3851,6 +4251,96 @@ describe('<App>', function() {
   });
 
 
+  describe('#emitEvent', function() {
+
+    it('should emit event with active tab', function() {
+
+      // given
+      const { app } = createApp();
+
+      const {
+        activeTab
+      } = app.state;
+
+      const payload = { foo: 'bar' };
+
+      const eventSpy = sinon.spy((event) => {
+
+        const {
+          foo,
+          tab
+        } = event;
+
+        expect(foo).to.equal('bar');
+        expect(tab).to.eql(activeTab);
+      });
+
+      app.on('foo', eventSpy);
+
+      // when
+      app.emitEvent('foo', payload);
+
+      // then
+      expect(eventSpy).to.have.been.called;
+    });
+
+
+    it('should allow overriding the tab via payload', function() {
+
+      // given
+      const { app } = createApp();
+
+      const overrideTab = { id: 'other-tab' };
+
+      const eventSpy = sinon.spy((event) => {
+        expect(event.tab).to.equal(overrideTab);
+      });
+
+      app.on('foo', eventSpy);
+
+      // when
+      app.emitEvent('foo', { tab: overrideTab });
+
+      // then
+      expect(eventSpy).to.have.been.called;
+    });
+
+  });
+
+
+  describe('deprecated #emit-event action', function() {
+
+    afterEach(sinon.restore);
+
+    it('should be a NOOP and log an error', async function() {
+
+      // given
+      const { app } = createApp();
+
+      const errorSpy = sinon.stub(console, 'error');
+
+      const eventSpy = sinon.spy();
+
+      app.on('foo', eventSpy);
+
+      // when
+      const result = await app.triggerAction('emit-event', {
+        type: 'foo',
+        payload: { bar: 'baz' }
+      });
+
+      // then
+      expect(result).not.to.exist;
+      expect(eventSpy).not.to.have.been.called;
+
+      expect(errorSpy).to.have.been.calledOnce;
+      expect(errorSpy.getCall(0).args[0]).to.match(/emit-event/);
+      expect(errorSpy.getCall(0).args[0]).to.match(/pull\/6106/);
+    });
+
+  });
+
+
   describe('layout', function() {
 
     it('should emit <layout.changed> event on layout update', async function() {
@@ -3988,6 +4478,33 @@ describe('<App>', function() {
 
       // then
       expect(showFileExplorerDialogSpy).to.have.been.calledOnce;
+    });
+
+  });
+
+
+  describe('#copyFilePath', function() {
+
+    it('should call systemClipboard#writeText', async function() {
+
+      // given
+      const systemClipboard = new SystemClipboard();
+
+      const writeTextSpy = sinon.spy(systemClipboard, 'writeText');
+
+      const { app } = createApp({
+        globals: {
+          systemClipboard
+        }
+      });
+
+      const [ tab ] = await app.openFiles([ createFile('1.bpmn') ]);
+
+      // when
+      app.copyFilePath(tab.file.path);
+
+      // then
+      expect(writeTextSpy).to.have.been.calledOnceWith({ text: tab.file.path });
     });
 
   });
@@ -4180,6 +4697,211 @@ describe('<App>', function() {
     });
 
 
+    it('should reuse linter across lints', async function() {
+
+      // given
+      const tabsProvider = new TabsProvider();
+
+      const getLinterSpy = sinon.spy(tabsProvider.getProvider('cloud-bpmn'), 'getLinter');
+
+      const { app } = createApp({ tabsProvider });
+
+      const tab = {
+        id: 'cloud-bpmn-1',
+        type: 'cloud-bpmn',
+        file: { contents: '', path: null }
+      };
+
+      // when
+      await app.getTabLinter(tab);
+      await app.getTabLinter(tab);
+
+      // then
+      // linter is built once and reused, not rebuilt on every lint
+      expect(getLinterSpy).to.have.been.calledOnce;
+    });
+
+
+    it('should build linter with a file-scoped config for the tab', async function() {
+
+      // given
+      const getConfigSpy = spy();
+
+      const config = new Config({
+        get: getConfigSpy
+      });
+
+      const tabsProvider = new TabsProvider();
+
+      const getLinterSpy = sinon.spy(tabsProvider.getProvider('cloud-bpmn'), 'getLinter');
+
+      const { app } = createApp({
+        globals: {
+          config
+        },
+        tabsProvider
+      });
+
+      // active tab differs from the tab we lint
+      app.state.activeTab = { id: 'other', file: { path: '/other/dir/diagram.bpmn' } };
+
+      const file = { contents: '', path: '/some/dir/diagram.bpmn' };
+
+      const tab = {
+        id: 'cloud-bpmn-1',
+        type: 'cloud-bpmn',
+        file
+      };
+
+      // when
+      await app.getTabLinter(tab);
+
+      // then
+      // the linter is built for the linted tab, with a config accessor that
+      // resolves against that tab's file - not the active tab
+      expect(getLinterSpy).to.have.been.calledOnce;
+
+      const [ , passedTab, getConfig ] = getLinterSpy.firstCall.args;
+
+      expect(passedTab).to.equal(tab);
+
+      getConfigSpy.resetHistory();
+
+      getConfig('bpmn.elementTemplates', tab.file);
+
+      expect(getConfigSpy).to.have.been.calledOnceWith('bpmn.elementTemplates', file);
+    });
+
+
+    it('should not rebuild linter for concurrent lints', async function() {
+
+      // given
+      const tabsProvider = new TabsProvider();
+
+      const getLinterSpy = sinon.spy(tabsProvider.getProvider('cloud-bpmn'), 'getLinter');
+
+      const { app } = createApp({ tabsProvider });
+
+      const tab = {
+        id: 'cloud-bpmn-1',
+        type: 'cloud-bpmn',
+        file: { contents: '', path: null }
+      };
+
+      // when
+      // two lints start before the first build resolves (lintTab is often
+      // called without awaiting), so they must share the in-flight build
+      await Promise.all([
+        app.getTabLinter(tab),
+        app.getTabLinter(tab)
+      ]);
+
+      // then
+      // the linter (and template validation) is built once, not per lint
+      expect(getLinterSpy).to.have.been.calledOnce;
+    });
+
+
+    it('should rebuild linter after templates changed', async function() {
+
+      // given
+      const tabsProvider = new TabsProvider();
+
+      const getLinterSpy = sinon.spy(tabsProvider.getProvider('cloud-bpmn'), 'getLinter');
+
+      const { app } = createApp({ tabsProvider });
+
+      const tab = {
+        id: 'cloud-bpmn-1',
+        type: 'cloud-bpmn',
+        file: { contents: '', path: null }
+      };
+
+      await app.getTabLinter(tab);
+
+      // when
+      // element templates were (re-)loaded, invalidating cached linters
+      app.linterCache = {};
+
+      await app.getTabLinter(tab);
+
+      // then
+      // templates changed, so the linter is rebuilt
+      expect(getLinterSpy).to.have.been.calledTwice;
+    });
+
+
+    it('should invalidate linter cache on element-templates-changed', async function() {
+
+      // given
+      const tabsProvider = new TabsProvider();
+
+      const getLinterSpy = sinon.spy(tabsProvider.getProvider('cloud-bpmn'), 'getLinter');
+
+      const { app } = createApp({ tabsProvider });
+
+      await app.createDiagram('cloud-bpmn');
+
+      const { activeTab } = app.state;
+
+      await app.lintTab(activeTab);
+
+      expect(getLinterSpy).to.have.been.calledOnce;
+
+      // when
+      // templates changed - the cache entry is dropped
+      await app.triggerAction('element-templates-changed', { tab: activeTab });
+
+      // then
+      // the next lint rebuilds the linter (the handler itself does not re-lint)
+      await app.lintTab(activeTab);
+
+      expect(getLinterSpy).to.have.been.calledTwice;
+    });
+
+
+    it('should invalidate only the changed tab linter on element-templates-changed', async function() {
+
+      // given
+      const tabsProvider = new TabsProvider();
+
+      const getLinterSpy = sinon.spy(tabsProvider.getProvider('cloud-bpmn'), 'getLinter');
+
+      const { app } = createApp({ tabsProvider });
+
+      await app.createDiagram('cloud-bpmn');
+
+      const otherTab = app.state.activeTab;
+
+      await app.createDiagram('cloud-bpmn');
+
+      const changedTab = app.state.activeTab;
+
+      // cache linters for both tabs
+      await app.lintTab(otherTab);
+      await app.lintTab(changedTab);
+
+      expect(getLinterSpy).to.have.been.calledTwice;
+
+      // when
+      // templates changed for one specific tab
+      await app.triggerAction('element-templates-changed', { tab: changedTab });
+
+      getLinterSpy.resetHistory();
+
+      // then
+      // the other tab's linter is retained (its templates did not change)
+      await app.lintTab(otherTab);
+
+      expect(getLinterSpy).not.to.have.been.called;
+
+      // but the changed tab's linter is rebuilt on the next lint
+      await app.lintTab(changedTab);
+
+      expect(getLinterSpy).to.have.been.calledOnce;
+    });
+
+
     it('should return empty linting state', async function() {
 
       // given
@@ -4228,25 +4950,17 @@ describe('<App>', function() {
           }
         });
 
-        const setLintingSpy = sinon.spy(app, 'setLintingState');
-
         // when
         await app.lintTab(activeTab);
 
         // then
-        const lastCall = setLintingSpy.lastCall;
-
-        expect(lastCall).to.exist;
-
-        const results = lastCall.args[ 1 ];
+        const results = app.getLintingState(activeTab);
         const warning = results.find(r => r.rule === 'camunda/version-mismatch');
 
         expect(warning).to.exist;
         expect(warning.category).to.equal('warn');
         expect(warning.message).to.include('8.7');
         expect(warning.message).to.include('8.8');
-
-        setLintingSpy.restore();
       });
 
 
@@ -4270,19 +4984,16 @@ describe('<App>', function() {
           }
         });
 
-        const setLintingSpy = sinon.spy(app, 'setLintingState');
-
         // when
         await app.lintTab(activeTab);
 
         // then
-        const results = setLintingSpy.lastCall.args[ 1 ];
+        const results = app.getLintingState(activeTab);
         const warning = results.find(r => r.rule === 'camunda/version-mismatch');
 
         expect(warning).to.exist;
         expect(warning.category).to.equal('warn');
 
-        setLintingSpy.restore();
       });
 
 
@@ -4306,19 +5017,16 @@ describe('<App>', function() {
           }
         });
 
-        const setLintingSpy = sinon.spy(app, 'setLintingState');
-
         // when
         await app.lintTab(activeTab);
 
         // then
-        const results = setLintingSpy.lastCall.args[ 1 ];
+        const results = app.getLintingState(activeTab);
         const warning = results.find(r => r.rule === 'camunda/version-mismatch');
 
         expect(warning).to.exist;
         expect(warning.category).to.equal('warn');
 
-        setLintingSpy.restore();
       });
 
 
@@ -4342,19 +5050,16 @@ describe('<App>', function() {
           }
         });
 
-        const setLintingSpy = sinon.spy(app, 'setLintingState');
-
         // when
         await app.lintTab(activeTab);
 
         // then
-        const results = setLintingSpy.lastCall.args[ 1 ];
+        const results = app.getLintingState(activeTab);
         const warning = results.find(r => r.rule === 'camunda/version-mismatch');
 
         expect(warning).to.exist;
         expect(warning.category).to.equal('warn');
 
-        setLintingSpy.restore();
       });
 
 
@@ -4378,18 +5083,15 @@ describe('<App>', function() {
           }
         });
 
-        const setLintingSpy = sinon.spy(app, 'setLintingState');
-
         // when
         await app.lintTab(activeTab);
 
         // then
-        const results = setLintingSpy.lastCall.args[ 1 ];
+        const results = app.getLintingState(activeTab);
         const warning = results.find(r => r.rule === 'camunda/version-mismatch');
 
         expect(warning).to.not.exist;
 
-        setLintingSpy.restore();
       });
 
 
@@ -4413,18 +5115,15 @@ describe('<App>', function() {
           }
         });
 
-        const setLintingSpy = sinon.spy(app, 'setLintingState');
-
         // when
         await app.lintTab(activeTab);
 
         // then
-        const results = setLintingSpy.lastCall.args[ 1 ];
+        const results = app.getLintingState(activeTab);
         const warning = results.find(r => r.rule === 'camunda/version-mismatch');
 
         expect(warning).to.not.exist;
 
-        setLintingSpy.restore();
       });
 
 
@@ -4445,18 +5144,15 @@ describe('<App>', function() {
           connectionCheckResult: null
         });
 
-        const setLintingSpy = sinon.spy(app, 'setLintingState');
-
         // when
         await app.lintTab(activeTab);
 
         // then
-        const results = setLintingSpy.lastCall.args[ 1 ];
+        const results = app.getLintingState(activeTab);
         const warning = results.find(r => r.rule === 'camunda/version-mismatch');
 
         expect(warning).to.not.exist;
 
-        setLintingSpy.restore();
       });
 
 
@@ -4480,18 +5176,15 @@ describe('<App>', function() {
           }
         });
 
-        const setLintingSpy = sinon.spy(app, 'setLintingState');
-
         // when
         await app.lintTab(activeTab);
 
         // then
-        const results = setLintingSpy.lastCall.args[ 1 ];
+        const results = app.getLintingState(activeTab);
         const warning = results.find(r => r.rule === 'camunda/version-mismatch');
 
         expect(warning).to.not.exist;
 
-        setLintingSpy.restore();
       });
 
 
@@ -4511,24 +5204,21 @@ describe('<App>', function() {
           }
         });
 
-        const setLintingSpy = sinon.spy(app, 'setLintingState');
-
         // when
         await app.lintTab(activeTab);
 
         // then
-        const results = setLintingSpy.lastCall.args[ 1 ];
+        const results = app.getLintingState(activeTab);
         const warning = results.find(r => r.rule === 'camunda/version-mismatch');
 
         expect(warning).to.not.exist;
 
-        setLintingSpy.restore();
       });
 
 
-      describe('connection status changed re-lint', function() {
+      describe('connection status changed', function() {
 
-        it('should re-lint when connection success state changes', async function() {
+        it('should recompose version warning without re-linting content', async function() {
 
           // given
           const { app } = createApp();
@@ -4537,58 +5227,19 @@ describe('<App>', function() {
 
           const { activeTab } = app.state;
 
-          setVersionState(app, activeTab, {
-            engineProfile: {
-              executionPlatform: 'Camunda Cloud',
-              executionPlatformVersion: '8.7.0'
-            },
-            connectionCheckResult: {
-              success: false,
-              reason: 'UNAVAILABLE'
-            }
-          });
-
-          const lintTabSpy = sinon.spy(app, 'lintTab');
-
-          // when - success state changes from false to true
-          app.emit('connectionManager.connectionStatusChanged', {
+          app.emit('tab.engineProfileChanged', {
             tab: activeTab,
-            success: true,
-            response: { gatewayVersion: '8.8.0' }
+            executionPlatform: 'Camunda Cloud',
+            executionPlatformVersion: '8.7.0'
           });
 
-          // then
           await waitFor(() => {
-            expect(lintTabSpy).to.have.been.calledOnce;
-          });
-
-          lintTabSpy.restore();
-        });
-
-
-        it('should re-lint when gateway version changes', async function() {
-
-          // given
-          const { app } = createApp();
-
-          await app.createDiagram('cloud-bpmn');
-
-          const { activeTab } = app.state;
-
-          setVersionState(app, activeTab, {
-            engineProfile: {
-              executionPlatform: 'Camunda Cloud',
-              executionPlatformVersion: '8.7.0'
-            },
-            connectionCheckResult: {
-              success: true,
-              response: { gatewayVersion: '8.8.0' }
-            }
+            expect(app.state.engineProfiles[ activeTab.id ].executionPlatformVersion).to.equal('8.7.0');
           });
 
           const lintTabSpy = sinon.spy(app, 'lintTab');
 
-          // when - gateway version changes
+          // when
           app.emit('connectionManager.connectionStatusChanged', {
             tab: activeTab,
             success: true,
@@ -4597,555 +5248,144 @@ describe('<App>', function() {
 
           // then
           await waitFor(() => {
-            expect(lintTabSpy).to.have.been.calledOnce;
-          });
+            const warning = app.getLintingState(activeTab)
+              .find(r => r.rule === 'camunda/version-mismatch');
 
-          lintTabSpy.restore();
-        });
-
-
-        it('should NOT re-lint on periodic poll with same result', async function() {
-
-          // given
-          const { app } = createApp();
-
-          await app.createDiagram('cloud-bpmn');
-
-          const { activeTab } = app.state;
-
-          setVersionState(app, activeTab, {
-            engineProfile: {
-              executionPlatform: 'Camunda Cloud',
-              executionPlatformVersion: '8.7.0'
-            },
-            connectionCheckResult: {
-              success: true,
-              response: { gatewayVersion: '8.8.0' }
-            }
-          });
-
-          const lintTabSpy = sinon.spy(app, 'lintTab');
-
-          // when - same success + same version (periodic poll)
-          app.emit('connectionManager.connectionStatusChanged', {
-            tab: activeTab,
-            success: true,
-            response: { gatewayVersion: '8.8.0' }
-          });
-
-          // then - wait for setState to commit, verify state updated
-          await waitFor(() => {
-            expect(app.state.connectionCheckResult.response.gatewayVersion).to.equal('8.8.0');
+            expect(warning).to.exist;
+            expect(warning.message).to.include('8.9');
           });
 
           expect(lintTabSpy).to.not.have.been.called;
-
-          lintTabSpy.restore();
-        });
-
-
-        it('should NOT re-lint on periodic poll with same failure', async function() {
-
-          // given
-          const { app } = createApp();
-
-          await app.createDiagram('cloud-bpmn');
-
-          const { activeTab } = app.state;
-
-          setVersionState(app, activeTab, {
-            engineProfile: {
-              executionPlatform: 'Camunda Cloud',
-              executionPlatformVersion: '8.7.0'
-            },
-            connectionCheckResult: {
-              success: false,
-              reason: 'UNAVAILABLE'
-            }
-          });
-
-          const lintTabSpy = sinon.spy(app, 'lintTab');
-
-          // when - still failing (periodic poll)
-          app.emit('connectionManager.connectionStatusChanged', {
-            tab: activeTab,
-            success: false,
-            reason: 'UNAVAILABLE'
-          });
-
-          // then - wait for setState to commit, verify state updated
-          await waitFor(() => {
-            expect(app.state.connectionCheckResult.reason).to.equal('UNAVAILABLE');
-          });
-
-          expect(lintTabSpy).to.not.have.been.called;
-
-          lintTabSpy.restore();
-        });
-
-
-        it('should update state even when not re-linting', async function() {
-
-          // given
-          const { app } = createApp();
-
-          await app.createDiagram('cloud-bpmn');
-
-          const { activeTab } = app.state;
-
-          setVersionState(app, activeTab, {
-            connectionCheckResult: {
-              success: true,
-              response: { gatewayVersion: '8.8.0' }
-            }
-          });
-
-          // when - same success + same version (periodic poll)
-          app.emit('connectionManager.connectionStatusChanged', {
-            tab: activeTab,
-            success: true,
-            response: { gatewayVersion: '8.8.0' }
-          });
-
-          // then
-          await waitFor(() => {
-            expect(app.state.connectionCheckResult).to.eql({
-              success: true,
-              response: { gatewayVersion: '8.8.0' }
-            });
-          });
-        });
-
-
-        it('should re-lint with current editor contents, not stale file contents', async function() {
-
-          // given
-          const { app } = createApp();
-
-          await app.openFiles([
-            createFile('1.cloud-bpmn', {
-              contents: 'linting-errors'
-            })
-          ]);
-
-          const { activeTab } = app.state;
-
-          setVersionState(app, activeTab, {
-            engineProfile: {
-              executionPlatform: 'Camunda Cloud',
-              executionPlatformVersion: '8.7.0'
-            },
-            connectionCheckResult: {
-              success: false,
-              reason: 'UNAVAILABLE'
-            }
-          });
-
-          // lint with saved file contents — error should exist
-          await app.lintTab(activeTab, 'linting-errors');
-
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Task_1')).to.be.true;
-          });
-
-          // simulate user removing the task in the editor (unsaved)
-          const tabComponent = app.tabRef.current;
-          tabComponent.currentContents = 'no-errors';
-
-          // when - connection status changes, triggering re-lint
-          app.emit('connectionManager.connectionStatusChanged', {
-            tab: activeTab,
-            success: true,
-            response: { gatewayVersion: '8.8.0' }
-          });
-
-          // then - lint should use current editor contents (task removed),
-          // not stale file contents (task still present)
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Task_1')).to.be.false;
-          });
-        });
-
-
-        it('should re-lint RPA tab with current editor contents', async function() {
-
-          // given
-          const { app } = createApp();
-
-          await app.openFiles([
-            createFile('1.rpa', {
-              contents: 'linting-errors'
-            })
-          ]);
-
-          const { activeTab } = app.state;
-
-          setVersionState(app, activeTab, {
-            engineProfile: {
-              executionPlatform: 'Camunda Cloud',
-              executionPlatformVersion: '8.7.0'
-            },
-            connectionCheckResult: {
-              success: false,
-              reason: 'UNAVAILABLE'
-            }
-          });
-
-          await app.lintTab(activeTab, 'linting-errors');
-
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Script_1')).to.be.true;
-          });
-
-          // simulate user editing in the editor (unsaved)
-          const tabComponent = app.tabRef.current;
-          tabComponent.currentContents = 'no-errors';
-
-          // when
-          app.emit('connectionManager.connectionStatusChanged', {
-            tab: activeTab,
-            success: true,
-            response: { gatewayVersion: '8.8.0' }
-          });
-
-          // then
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Script_1')).to.be.false;
-          });
-        });
-
-
-        it('should re-lint Form (C7) tab with current editor contents', async function() {
-
-          // given
-          const { app } = createApp();
-
-          await app.openFiles([
-            createFile('1.form', {
-              contents: 'linting-errors'
-            })
-          ]);
-
-          const { activeTab } = app.state;
-
-          setVersionState(app, activeTab, {
-            engineProfile: {
-              executionPlatform: 'Camunda Platform',
-              executionPlatformVersion: '7.15'
-            },
-            connectionCheckResult: {
-              success: false,
-              reason: 'UNAVAILABLE'
-            }
-          });
-
-          await app.lintTab(activeTab, 'linting-errors');
-
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Field_1')).to.be.true;
-          });
-
-          // simulate user editing in the editor (unsaved)
-          const tabComponent = app.tabRef.current;
-          tabComponent.currentContents = 'no-errors';
-
-          // when
-          app.emit('connectionManager.connectionStatusChanged', {
-            tab: activeTab,
-            success: true,
-            response: { gatewayVersion: '8.8.0' }
-          });
-
-          // then
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Field_1')).to.be.false;
-          });
-        });
-
-
-        it('should re-lint BPMN (C7) tab with current editor contents', async function() {
-
-          // given
-          const { app } = createApp();
-
-          await app.openFiles([
-            createFile('1.bpmn', {
-              contents: 'linting-errors'
-            })
-          ]);
-
-          const { activeTab } = app.state;
-
-          setVersionState(app, activeTab, {
-            engineProfile: {
-              executionPlatform: 'Camunda Platform',
-              executionPlatformVersion: '7.15'
-            },
-            connectionCheckResult: {
-              success: false,
-              reason: 'UNAVAILABLE'
-            }
-          });
-
-          await app.lintTab(activeTab, 'linting-errors');
-
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Task_1')).to.be.true;
-          });
-
-          // simulate user editing in the editor (unsaved)
-          const tabComponent = app.tabRef.current;
-          tabComponent.currentContents = 'no-errors';
-
-          // when
-          app.emit('connectionManager.connectionStatusChanged', {
-            tab: activeTab,
-            success: true,
-            response: { gatewayVersion: '8.8.0' }
-          });
-
-          // then
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Task_1')).to.be.false;
-          });
         });
 
       });
 
 
-      describe('engine profile changed re-lint', function() {
+      describe('engine profile changed', function() {
 
-        it('should re-lint active cloud-bpmn tab with current editor contents', async function() {
-
-          // given
-          const { app } = createApp();
-
-          // create dummy tab to advance uuid past 0
-          // (_handleEngineProfileChanged guards on !tab.id)
-          await app.createDiagram('cloud-bpmn');
-
-          await app.openFiles([
-            createFile('1.cloud-bpmn', {
-              contents: 'linting-errors'
-            })
-          ]);
-
-          const { activeTab } = app.state;
-
-          await app.lintTab(activeTab, 'linting-errors');
-
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Task_1')).to.be.true;
-          });
-
-          // simulate user editing in the editor (unsaved)
-          const tabComponent = app.tabRef.current;
-          tabComponent.currentContents = 'no-errors';
-
-          // when - engine profile changes on active tab
-          app.emit('tab.engineProfileChanged', {
-            tab: activeTab,
-            executionPlatform: 'Camunda Cloud',
-            executionPlatformVersion: '8.8.0'
-          });
-
-          // then - should use current editor contents
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Task_1')).to.be.false;
-          });
-        });
-
-
-        it('should re-lint active RPA tab with current editor contents', async function() {
-
-          // given
-          const { app } = createApp();
-
-          await app.createDiagram('rpa');
-
-          await app.openFiles([
-            createFile('1.rpa', {
-              contents: 'linting-errors'
-            })
-          ]);
-
-          const { activeTab } = app.state;
-
-          await app.lintTab(activeTab, 'linting-errors');
-
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Script_1')).to.be.true;
-          });
-
-          const tabComponent = app.tabRef.current;
-          tabComponent.currentContents = 'no-errors';
-
-          // when
-          app.emit('tab.engineProfileChanged', {
-            tab: activeTab,
-            executionPlatform: 'Camunda Cloud',
-            executionPlatformVersion: '8.8.0'
-          });
-
-          // then
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Script_1')).to.be.false;
-          });
-        });
-
-
-        it('should re-lint active Form (C7) tab with current editor contents', async function() {
-
-          // given
-          const { app } = createApp();
-
-          await app.createDiagram('form');
-
-          await app.openFiles([
-            createFile('1.form', {
-              contents: 'linting-errors'
-            })
-          ]);
-
-          const { activeTab } = app.state;
-
-          await app.lintTab(activeTab, 'linting-errors');
-
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Field_1')).to.be.true;
-          });
-
-          const tabComponent = app.tabRef.current;
-          tabComponent.currentContents = 'no-errors';
-
-          // when
-          app.emit('tab.engineProfileChanged', {
-            tab: activeTab,
-            executionPlatform: 'Camunda Platform',
-            executionPlatformVersion: '7.16'
-          });
-
-          // then
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Field_1')).to.be.false;
-          });
-        });
-
-
-        it('should re-lint active BPMN (C7) tab with current editor contents', async function() {
-
-          // given
-          const { app } = createApp();
-
-          await app.createDiagram('bpmn');
-
-          await app.openFiles([
-            createFile('1.bpmn', {
-              contents: 'linting-errors'
-            })
-          ]);
-
-          const { activeTab } = app.state;
-
-          await app.lintTab(activeTab, 'linting-errors');
-
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Task_1')).to.be.true;
-          });
-
-          const tabComponent = app.tabRef.current;
-          tabComponent.currentContents = 'no-errors';
-
-          // when
-          app.emit('tab.engineProfileChanged', {
-            tab: activeTab,
-            executionPlatform: 'Camunda Platform',
-            executionPlatformVersion: '7.16'
-          });
-
-          // then
-          await waitFor(() => {
-            const errors = app.getLintingState(activeTab);
-
-            expect(errors.some(e => e.id === 'Task_1')).to.be.false;
-          });
-        });
-
-
-        it('should re-lint non-active tab with file contents', async function() {
+        it('should record the selected engine profile in state', async function() {
 
           // given
           const { app } = createApp();
 
           await app.createDiagram('cloud-bpmn');
 
-          await app.openFiles([
-            createFile('1.cloud-bpmn', {
-              contents: 'linting-errors'
-            }),
-            createFile('2.cloud-bpmn', {
-              contents: 'no-errors'
-            })
-          ]);
-
-          // last opened tab is active, '1.cloud-bpmn' is background
-          const backgroundTab = app.state.tabs.find(t => t.file && t.file.path === '1.cloud-bpmn');
           const { activeTab } = app.state;
 
-          expect(activeTab).to.not.eql(backgroundTab);
-
-          await app.lintTab(backgroundTab, 'linting-errors');
-
-          await waitFor(() => {
-            const errors = app.getLintingState(backgroundTab);
-
-            expect(errors.some(e => e.id === 'Task_1')).to.be.true;
-          });
-
-          // when - engine profile changes on background tab
+          // when
           app.emit('tab.engineProfileChanged', {
-            tab: backgroundTab,
+            tab: activeTab,
             executionPlatform: 'Camunda Cloud',
             executionPlatformVersion: '8.8.0'
           });
 
-          // then - should use file contents (linting-errors), not editor contents,
-          // because the tab is not active
+          // then
           await waitFor(() => {
-            const errors = app.getLintingState(backgroundTab);
-
-            expect(errors.some(e => e.id === 'Task_1')).to.be.true;
+            expect(app.state.engineProfiles[ activeTab.id ]).to.eql({
+              executionPlatform: 'Camunda Cloud',
+              executionPlatformVersion: '8.8.0'
+            });
           });
+        });
+
+
+        it('should not re-lint content (the editor re-lints on the document change)', async function() {
+
+          // given
+          const { app } = createApp();
+
+          await app.createDiagram('cloud-bpmn');
+
+          const { activeTab } = app.state;
+
+          const lintTabSpy = sinon.spy(app, 'lintTab');
+
+          // when
+          app.emit('tab.engineProfileChanged', {
+            tab: activeTab,
+            executionPlatform: 'Camunda Cloud',
+            executionPlatformVersion: '8.8.0'
+          });
+
+          // then
+          await waitFor(() => {
+            expect(app.state.engineProfiles[ activeTab.id ].executionPlatformVersion).to.equal('8.8.0');
+          });
+
+          expect(lintTabSpy).to.not.have.been.called;
+        });
+
+
+        it('should recompose version warning from updated engine profile', async function() {
+
+          // given
+          const { app } = createApp();
+
+          await app.createDiagram('cloud-bpmn');
+
+          const { activeTab } = app.state;
+
+          app.emit('tab.engineProfileChanged', {
+            tab: activeTab,
+            executionPlatform: 'Camunda Cloud',
+            executionPlatformVersion: '8.7.0'
+          });
+
+          await waitFor(() => {
+            expect(app.state.engineProfiles[ activeTab.id ].executionPlatformVersion).to.equal('8.7.0');
+          });
+
+          app.emit('connectionManager.connectionStatusChanged', {
+            tab: activeTab,
+            success: true,
+            response: { gatewayVersion: '8.7.0' }
+          });
+
+          await waitFor(() => {
+            expect(app.state.connectionCheckResult.response.gatewayVersion).to.equal('8.7.0');
+            expect(app.state.engineProfiles[ activeTab.id ].executionPlatformVersion).to.equal('8.7.0');
+          });
+
+          const lintTabSpy = sinon.spy(app, 'lintTab');
+
+          // when
+          app.emit('tab.engineProfileChanged', {
+            tab: activeTab,
+            executionPlatform: 'Camunda Cloud',
+            executionPlatformVersion: '8.9.0'
+          });
+
+          // then
+          await waitFor(() => {
+            const warning = app.getLintingState(activeTab)
+              .find(r => r.rule === 'camunda/version-mismatch');
+
+            expect(warning).to.exist;
+            expect(warning.message).to.include('8.9');
+          });
+
+          expect(lintTabSpy).to.not.have.been.called;
+        });
+
+
+        it('should ignore events for a tab without an id', async function() {
+
+          // given
+          const { app } = createApp();
+
+          await app.createDiagram('cloud-bpmn');
+
+          const before = app.state.engineProfiles;
+
+          // when
+          app.emit('tab.engineProfileChanged', {
+            tab: { id: undefined },
+            executionPlatform: 'Camunda Cloud',
+            executionPlatformVersion: '8.8.0'
+          });
+
+          // then
+          expect(app.state.engineProfiles).to.equal(before);
         });
 
       });

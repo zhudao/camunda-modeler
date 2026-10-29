@@ -1,0 +1,49 @@
+.form-combobox {
+  position: relative;
+}
+
+.form-combobox-control {
+  position: relative;
+}
+
+/* match the design system select content */
+.form-combobox-options {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  max-height: 180px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--elevation-md);
+  list-style: none;
+
+  &.open-above {
+    top: auto;
+    bottom: calc(100% + 4px);
+  }
+}
+
+.form-combobox-option {
+  padding: 8px 10px;
+  overflow: hidden;
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--primary-foreground-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.form-combobox-option:hover,
+.form-combobox-option.active {
+  background: var(--primary-background-strong);
+  color: var(--primary-foreground-strong);
+}

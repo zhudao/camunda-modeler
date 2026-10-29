@@ -1,0 +1,1201 @@
+/**
+ * Copyright Camunda Services GmbH and/or licensed to Camunda Services GmbH
+ * under one or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information regarding copyright
+ * ownership.
+ *
+ * Camunda licenses this file to you under the MIT; you may not use this file
+ * except in compliance with the MIT License.
+ */
+
+import { expect } from 'chai';
+import * as sinon from 'sinon';
+
+import React from 'react';
+
+import { render, fireEvent, waitFor, screen } from '@testing-library/react';
+import { userEvent } from '@testing-library/user-event';
+
+import CredentialModal from '../CredentialModal';
+import { getInitialFieldValues } from '../credentialForm';
+
+const OPTIONAL_FIELD = {
+  id: 'token',
+  label: 'API token',
+  type: 'String',
+  optional: true,
+  binding: { type: 'property', name: 'token' }
+};
+
+const REQUIRED_FIELD = {
+  id: 'token',
+  label: 'API token',
+  type: 'String',
+  constraints: { notEmpty: true },
+  binding: { type: 'property', name: 'token' }
+};
+
+const SECRET_FIELD = {
+  id: 'apiKey',
+  label: 'API key',
+  type: 'String',
+  secret: true,
+  binding: { type: 'property', name: 'apiKey' }
+};
+
+const DESCRIBED_FIELD = {
+  id: 'token',
+  label: 'API token',
+  type: 'String',
+  optional: true,
+  description: 'See <a href="https://docs.camunda.io">docs</a>',
+  binding: { type: 'property', name: 'token' }
+};
+
+
+describe('<CredentialModal>', function() {
+
+  it('should render the create title', function() {
+
+    // when
+    const { getByText } = renderModal({ mode: 'create' });
+
+    // then
+    expect(getByText('Add credential')).to.exist;
+  });
+
+
+  it('should render the edit title', function() {
+
+    // when
+    const { getByText } = renderModal({ mode: 'edit', credentialName: 'MY_CRED' });
+
+    // then
+    expect(getByText('Edit credential')).to.exist;
+  });
+
+
+  it('should render the upgrade title', function() {
+
+    // when
+    const { getByText } = renderModal({ mode: 'upgrade', credentialName: 'MY_CRED' });
+
+    // then
+    expect(getByText('Upgrade credential')).to.exist;
+  });
+
+
+  it('should render the create submit label', function() {
+
+    // when
+    const { getByRole } = renderModal({ mode: 'create' });
+
+    // then
+    expect(getByRole('button', { name: 'Create and select' })).to.exist;
+  });
+
+
+  it('should render the edit submit label', function() {
+
+    // when
+    const { getByRole } = renderModal({ mode: 'edit', credentialName: 'MY_CRED' });
+
+    // then
+    expect(getByRole('button', { name: 'Save' })).to.exist;
+  });
+
+
+  it('should disable submit when the credential name is empty', function() {
+
+    // when
+    const { getByRole, queryByText } = renderModal({ mode: 'create', displayName: '' });
+
+    // then
+    expect(queryByText(/=camunda\.vars\.env\./)).not.to.exist;
+    expect(getByRole('button', { name: 'Create and select' }).disabled).to.be.true;
+  });
+
+
+  it('should enable submit when the name is set', function() {
+
+    // when
+    const { getByRole } = renderModal({ mode: 'create', displayName: 'My cred' });
+
+    // then
+    expect(getByRole('button', { name: 'Create and select' }).disabled).to.be.false;
+  });
+
+
+  it('should disable submit while loading', function() {
+
+    // when
+    const { getByRole, queryByLabelText } = renderModal({
+      mode: 'edit',
+      displayName: 'My cred',
+      credentialName: 'MY_CRED',
+      loading: true
+    });
+
+    // then
+    expect(getByRole('status', { name: 'Loading credential' })).to.exist;
+    expect(queryByLabelText('Credential name')).not.to.exist;
+    expect(queryByLabelText('Credential ID *')).not.to.exist;
+    expect(queryByLabelText('API token')).not.to.exist;
+    expect(getByRole('button', { name: 'Save' }).disabled).to.be.true;
+  });
+
+
+  it('should render loaded conditional fields without showing defaults', function() {
+
+    // given
+    const conditionalTemplate = template({
+      id: 'type',
+      label: 'Type',
+      type: 'Dropdown',
+      choices: [
+        { name: 'Default', value: 'default' },
+        { name: 'Custom', value: 'custom' }
+      ],
+      value: 'default',
+      binding: { type: 'property', name: 'type' }
+    });
+    conditionalTemplate.properties.push({
+      id: 'customValue',
+      label: 'Custom value',
+      type: 'String',
+      condition: { property: 'type', equals: 'custom' },
+      binding: { type: 'property', name: 'customValue' }
+    });
+
+    const { getByLabelText, queryByLabelText, rerender } = renderModal({
+      mode: 'edit',
+      credentialName: 'MY_CRED',
+      configurationTemplate: conditionalTemplate,
+      initialValues: { type: 'default', customValue: '' },
+      loading: true
+    });
+
+    // when
+    rerender(<CredentialModal
+      { ...modalProps({
+        mode: 'edit',
+        credentialName: 'MY_CRED',
+        configurationTemplate: conditionalTemplate,
+        initialValues: { type: 'custom', customValue: 'loaded' },
+        loading: false
+      }) }
+    />);
+
+    // then
+    expect(queryByLabelText('Loading credential')).not.to.exist;
+    expect(getByLabelText('Type').textContent).to.equal('Custom');
+    expect(getByLabelText('Custom value').value).to.equal('loaded');
+  });
+
+  [
+    [ 'show an isEmpty field for an empty value', true, '', true ],
+    [ 'hide an isEmpty field for a filled value', true, 'configured', false ],
+    [ 'hide an isEmpty false field for an empty value', false, '', false ],
+    [ 'show an isEmpty false field for a filled value', false, 'configured', true ]
+  ].forEach(([ testName, isEmpty, sourceValue, visible ]) => {
+
+    it(`should ${ testName }`, function() {
+
+      // given
+      const configurationTemplate = conditionalTemplate({
+        property: 'source',
+        isEmpty
+      });
+
+      // when
+      const { queryByLabelText } = renderModal({
+        configurationTemplate,
+        initialValues: {
+          source: sourceValue,
+          conditional: ''
+        }
+      });
+
+      // then
+      expect(!!queryByLabelText('Conditional field')).to.equal(visible);
+    });
+  });
+
+  it('should evaluate isEmpty inside allMatch', function() {
+
+    // given
+    const configurationTemplate = conditionalTemplate({
+      allMatch: [
+        { property: 'source', isEmpty: false },
+        { property: 'type', equals: 'custom' }
+      ]
+    });
+
+    // when
+    const { getByLabelText } = renderModal({
+      configurationTemplate,
+      initialValues: {
+        source: 'configured',
+        type: 'custom',
+        conditional: ''
+      }
+    });
+
+    // then
+    expect(getByLabelText('Conditional field')).to.exist;
+  });
+
+  it('should render declared groups and a trailing default group', function() {
+
+    // given
+    const configurationTemplate = {
+      ...template(),
+      groups: [
+        { id: 'authentication', label: 'Authentication' },
+        { id: 'configuration', label: 'Configuration' }
+      ],
+      properties: [
+        { ...OPTIONAL_FIELD, id: 'auth', label: 'Auth', group: 'authentication' },
+        { ...OPTIONAL_FIELD, id: 'region', label: 'Region', group: 'configuration' },
+        { ...OPTIONAL_FIELD, id: 'other', label: 'Other', group: 'undeclared' }
+      ]
+    };
+
+    // when
+    const { getAllByRole, getByRole } = renderModal({ configurationTemplate });
+
+    // then
+    const headings = getAllByRole('heading', { level: 3 });
+
+    expect(headings.map(heading => heading.textContent)).to.eql([
+      'Authentication',
+      'Configuration',
+      'Credential properties'
+    ]);
+    expect(headings[0].closest('section').contains(getByRole('textbox', { name: 'Auth' }))).to.be.true;
+    expect(headings[2].closest('section').contains(getByRole('textbox', { name: 'Other' }))).to.be.true;
+  });
+
+
+  it('should normalize typed defaults for form controls', function() {
+
+    // given
+    const configurationTemplate = {
+      ...template(),
+      properties: [
+        { ...OPTIONAL_FIELD, id: 'number', label: 'Number', type: 'Number', value: 42 },
+        { ...OPTIONAL_FIELD, id: 'boolean', label: 'Boolean', type: 'Boolean', value: false }
+      ]
+    };
+
+    // when
+    const { getByLabelText } = renderModal({ configurationTemplate });
+
+    // then
+    expect(getByLabelText('Number').value).to.equal('42');
+    expect(getByLabelText('Boolean').value).to.equal('false');
+  });
+
+
+  it('should not render hidden fields but submit their values', async function() {
+
+    // given
+    const onSubmit = sinon.spy();
+
+    const configurationTemplate = {
+      ...template(),
+      properties: [
+        { ...OPTIONAL_FIELD, id: 'visible', label: 'Visible' },
+        { ...OPTIONAL_FIELD, id: 'secretVersion', label: 'Version', type: 'Hidden', value: '1' }
+      ]
+    };
+
+    // when
+    const { queryByLabelText, getByRole } = renderModal({
+      configurationTemplate,
+      displayName: 'My cred',
+      onSubmit
+    });
+
+    // then
+    expect(queryByLabelText('Visible')).to.exist;
+    expect(queryByLabelText('Version')).not.to.exist;
+
+    // when
+    fireEvent.click(getByRole('button', { name: 'Create and select' }));
+
+    // then
+    await waitFor(() => {
+      expect(onSubmit).to.have.been.calledOnce;
+    });
+
+    expect(onSubmit.firstCall.args[0].values).to.include({ secretVersion: '1' });
+  });
+
+
+  it('should disable submit when a required field is empty', function() {
+
+    // when
+    const { getByLabelText, getByRole, getByText } = renderModal({
+      mode: 'create',
+      displayName: 'My cred',
+      configurationTemplate: template(REQUIRED_FIELD)
+    });
+
+    // then
+    const input = getByLabelText(/^API token/);
+
+    expect(getByRole('button', { name: 'Create and select' }).disabled).to.be.true;
+    expect(getByText('API token must not be empty.')).to.exist;
+    expect(input.closest('.credential-modal-field').hasAttribute('data-invalid')).to.be.true;
+    expect(input.getAttribute('aria-invalid')).to.equal('true');
+  });
+
+
+  it('should show an error when a required secret field is empty', function() {
+
+    // when
+    const { getByLabelText, getByRole, getByText } = renderModal({
+      mode: 'create',
+      displayName: 'My cred',
+      configurationTemplate: template({
+        ...SECRET_FIELD,
+        constraints: { notEmpty: true }
+      }),
+      initialValues: { apiKey: '' }
+    });
+
+    // then
+    const input = getByLabelText(/^API key/);
+
+    expect(getByRole('button', { name: 'Create and select' }).disabled).to.be.true;
+    expect(getByText('API key must not be empty.')).to.exist;
+    expect(input.closest('.credential-modal-field').hasAttribute('data-invalid')).to.be.true;
+    expect(input.getAttribute('aria-describedby')).to.equal('credential-field-apiKey-error');
+  });
+
+
+  it('should allow clearing an optional dropdown', async function() {
+
+    // given
+    const configurationTemplate = template({
+      id: 'type',
+      label: 'Type',
+      type: 'Dropdown',
+      choices: [ { name: 'Custom', value: 'custom' } ],
+      optional: true,
+      value: 'custom',
+      binding: { type: 'property', name: 'type' }
+    });
+    const onSubmit = sinon.stub().resolves();
+    const { getByLabelText, getByRole } = renderModal({ configurationTemplate, displayName: 'My cred', onSubmit });
+
+    // when
+    await selectOption(getByLabelText('Type'), 'None');
+    fireEvent.click(getByRole('button', { name: 'Create and select' }));
+
+    // then
+    expect(onSubmit).to.have.been.calledOnce;
+    expect(onSubmit.firstCall.args[0].values.type).to.equal('');
+  });
+
+
+  it('should not allow clearing a non-optional dropdown', async function() {
+
+    // given
+    const { getByLabelText } = renderModal({
+      configurationTemplate: template({
+        id: 'type',
+        label: 'Type',
+        type: 'Dropdown',
+        choices: [ { name: 'Custom', value: 'custom' } ],
+        value: 'custom',
+        binding: { type: 'property', name: 'type' }
+      })
+    });
+
+    // when
+    await userEvent.click(getByLabelText('Type'));
+
+    // then
+    expect(screen.getAllByRole('option').map(option => option.textContent)).to.eql([ 'Custom' ]);
+  });
+
+
+  it('should select the first option of a non-optional dropdown without value', async function() {
+
+    // given
+    const onSubmit = sinon.spy();
+    const { getByRole } = renderModal({
+      displayName: 'My cred',
+      configurationTemplate: template({
+        id: 'type',
+        label: 'Type',
+        type: 'Dropdown',
+        choices: [ { name: 'Low', value: 'low' }, { name: 'High', value: 'high' } ],
+        binding: { type: 'property', name: 'type' }
+      }),
+      onSubmit
+    });
+
+    // when
+    fireEvent.click(getByRole('button', { name: 'Create and select' }));
+
+    // then
+    await waitFor(() => {
+      expect(onSubmit).to.have.been.calledOnce;
+      expect(onSubmit.firstCall.args[0].values.type).to.equal('low');
+    });
+  });
+
+
+  it('should not preselect an optional dropdown without value', function() {
+
+    // when
+    const { getByLabelText } = renderModal({
+      configurationTemplate: template({
+        id: 'type',
+        label: 'Type',
+        type: 'Dropdown',
+        choices: [ { name: 'Low', value: 'low' }, { name: 'High', value: 'high' } ],
+        optional: true,
+        binding: { type: 'property', name: 'type' }
+      })
+    });
+
+    // then
+    expect(getByLabelText('Type').textContent).to.equal('None');
+  });
+
+
+  [
+    [ { minLength: 4 }, 'abc', 'API token must be at least 4 characters.' ],
+    [ { maxLength: 2 }, 'abc', 'API token cannot exceed 2 characters.' ],
+    [ { pattern: { value: '^A+$', message: 'Use only A.' } }, 'ABC', 'API token Use only A.' ]
+  ].forEach(([ constraints, value, message ]) => {
+
+    it(`should validate ${ Object.keys(constraints)[0] }`, function() {
+
+      // given
+      const configurationTemplate = template({
+        ...OPTIONAL_FIELD,
+        constraints
+      });
+      const { getByLabelText, getByRole, getByText } = renderModal({ configurationTemplate });
+
+      // when
+      fireEvent.change(getByLabelText('API token'), { target: { value } });
+
+      // then
+      expect(getByText(message)).to.exist;
+      expect(getByLabelText('API token').getAttribute('aria-invalid')).to.equal('true');
+      expect(getByRole('button', { name: 'Create and select' }).disabled).to.be.true;
+    });
+  });
+
+
+  it('should call onSubmit with the entered credential', async function() {
+
+    // given
+    const onSubmit = sinon.spy();
+
+    const { getByRole } = renderModal({ mode: 'create', displayName: 'My cred', onSubmit });
+
+    // when
+    fireEvent.click(getByRole('button', { name: 'Create and select' }));
+
+    // then
+    await waitFor(() => {
+      expect(onSubmit).to.have.been.calledOnce;
+    });
+
+    expect(onSubmit.firstCall.args[0]).to.include({
+      displayName: 'My cred'
+    });
+    expect(onSubmit.firstCall.args[0].name).to.match(/^my_cred_[a-z0-9]{6}$/);
+  });
+
+
+  it('should render the display name as editable in create mode', function() {
+
+    // when
+    const { baseElement } = renderModal({ mode: 'create' });
+
+    // then
+    expect(baseElement.querySelector('#credential-display-name').readOnly).to.be.false;
+  });
+
+
+  it('should render the display name as editable in edit mode', function() {
+
+    // when
+    const { baseElement } = renderModal({
+      mode: 'edit',
+      displayName: 'My cred',
+      credentialName: 'MY_CRED'
+    });
+
+    // then
+    expect(baseElement.querySelector('#credential-display-name').readOnly).to.be.false;
+  });
+
+
+  it('should generate the credential reference from the display name', function() {
+
+    // when
+    const { getByText, queryByLabelText } = renderModal({
+      mode: 'create',
+      displayName: 'My Slack workspace'
+    });
+
+    // then
+    expect(queryByLabelText('Credential ID *')).not.to.exist;
+    expect(getByText(/^=camunda\.vars\.env\.my_slack_workspace_[a-z0-9]{6}$/)).to.exist;
+  });
+
+
+  it('should hide the credential reference when the display name is cleared', function() {
+
+    // given
+    const { getByLabelText, getByRole, queryByText } = renderModal({
+      mode: 'create',
+      displayName: 'My Slack workspace'
+    });
+
+    // when
+    fireEvent.change(getByLabelText('Credential name'), { target: { value: '' } });
+
+    // then
+    expect(queryByText(/=camunda\.vars\.env\./)).not.to.exist;
+    expect(getByRole('button', { name: 'Create and select' }).disabled).to.be.true;
+  });
+
+
+  it('should preserve the generated suffix when the display name changes', function() {
+
+    // given
+    const { getByLabelText, getByText } = renderModal({
+      mode: 'create',
+      displayName: 'My Slack workspace'
+    });
+    const suffix = getByText(/^=camunda\.vars\.env\.my_slack_workspace_[a-z0-9]{6}$/)
+      .textContent.slice(-6);
+
+    // when
+    fireEvent.change(getByLabelText('Credential name'), { target: { value: 'Renamed credential' } });
+
+    // then
+    expect(getByText(`=camunda.vars.env.renamed_credential_${ suffix }`)).to.exist;
+  });
+
+
+  it('should preserve the credential reference when the display name changes in edit mode', function() {
+
+    // given
+    const { getByLabelText, getByText } = renderModal({
+      mode: 'edit',
+      displayName: 'My Slack workspace',
+      credentialName: 'my_slack_workspace_abcdef'
+    });
+
+    // when
+    fireEvent.change(getByLabelText('Credential name'), { target: { value: 'Renamed credential' } });
+
+    // then
+    expect(getByText('=camunda.vars.env.my_slack_workspace_abcdef')).to.exist;
+  });
+
+
+  it('should suggest a unique credential name and reference', function() {
+
+    // when
+    const { getByLabelText, getByRole, getByText, queryByText } = renderModal({
+      mode: 'create',
+      displayName: 'My cred',
+      existingCredentials: [ {
+        name: 'OTHER_ID',
+        metadata: { displayName: 'My cred' }
+      } ]
+    });
+
+    // then
+    const input = getByLabelText('Credential name');
+
+    expect(input.value).to.equal('My cred 2');
+    expect(getByText(/^=camunda\.vars\.env\.my_cred_2_[a-z0-9]{6}$/)).to.exist;
+    expect(getByRole('button', { name: 'Create and select' }).disabled).to.be.false;
+    expect(queryByText(/already exists/)).not.to.exist;
+  });
+
+
+  it('should allow saving the credential being edited', function() {
+
+    // when
+    const { getByRole, queryByText } = renderModal({
+      mode: 'edit',
+      displayName: 'My cred',
+      credentialName: 'MY_CRED',
+      existingCredentials: [ {
+        name: 'MY_CRED',
+        metadata: { displayName: 'My cred' }
+      } ]
+    });
+
+    // then
+    expect(getByRole('button', { name: 'Save' }).disabled).to.be.false;
+    expect(queryByText(/already exists/)).not.to.exist;
+  });
+
+
+  it('should render a template field label', function() {
+
+    // when
+    const { getByText } = renderModal({ mode: 'create' });
+
+    // then
+    expect(getByText('API token')).to.exist;
+  });
+
+
+  it('should render the credential reference preview', function() {
+
+    // when
+    const { getByText } = renderModal({ mode: 'create', displayName: 'My cred' });
+
+    // then
+    expect(getByText(/^=camunda\.vars\.env\.my_cred_[a-z0-9]{6}$/)).to.exist;
+  });
+
+
+  it('should render a secret field placeholder', function() {
+
+    // when
+    const { getByPlaceholderText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD)
+    });
+
+    // then
+    expect(getByPlaceholderText('camunda.secrets.SECRET_NAME')).to.exist;
+  });
+
+
+  it('should select an available secret reference', async function() {
+
+    // given
+    const onSubmit = sinon.spy();
+    const { getByLabelText, getByRole } = renderModal({
+      mode: 'create',
+      displayName: 'My cred',
+      configurationTemplate: template(SECRET_FIELD),
+      secretReferences: [ 'camunda.secrets.API_KEY', 'camunda.secrets.PASSWORD' ],
+      onSubmit
+    });
+
+    // when
+    fireEvent.click(getByLabelText('API key'));
+    fireEvent.click(getByRole('option', { name: 'camunda.secrets.PASSWORD' }));
+    fireEvent.click(getByRole('button', { name: 'Create and select' }));
+
+    // then
+    await waitFor(() => {
+      expect(onSubmit).to.have.been.calledOnce;
+      expect(onSubmit.firstCall.args[0].values.apiKey).to.equal('camunda.secrets.PASSWORD');
+    });
+  });
+
+
+  it('should accept a custom secret value', async function() {
+
+    // given
+    const onSubmit = sinon.spy();
+    const { getByLabelText, getByRole } = renderModal({
+      mode: 'create',
+      displayName: 'My cred',
+      configurationTemplate: template(SECRET_FIELD),
+      secretReferences: [],
+      onSubmit
+    });
+
+    // when
+    fireEvent.change(getByLabelText('API key'), { target: { value: 'custom-value' } });
+    fireEvent.click(getByRole('button', { name: 'Create and select' }));
+
+    // then
+    await waitFor(() => {
+      expect(onSubmit).to.have.been.calledOnce;
+      expect(onSubmit.firstCall.args[0].values.apiKey).to.equal('custom-value');
+    });
+  });
+
+
+  it('should preserve a custom value when secret references load', async function() {
+
+    // given
+    const props = {
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      secretReferences: null
+    };
+    const { getByLabelText, rerender } = renderModal(props);
+    const input = getByLabelText('API key');
+
+    // when
+    fireEvent.change(input, { target: { value: 'custom-value' } });
+    rerender(<CredentialModal { ...modalProps({
+      ...props,
+      secretReferences: [ 'camunda.secrets.API_KEY' ]
+    }) } />);
+
+    // then
+    await waitFor(() => {
+      expect(getByLabelText('API key').value).to.equal('custom-value');
+    });
+  });
+
+
+  it('should show a non-blocking warning for a missing secret reference', function() {
+
+    // when
+    const { getByLabelText, getByRole, getByText } = renderModal({
+      mode: 'create',
+      displayName: 'My cred',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'camunda.secrets.MISSING' },
+      secretReferences: []
+    });
+
+    // then
+    const input = getByLabelText('API key');
+
+    expect(getByText(/does not exist on the connected Camunda instance/)).to.exist;
+    expect(input.closest('.credential-modal-field').hasAttribute('data-warning')).to.be.true;
+    expect(input.getAttribute('aria-invalid')).to.be.null;
+    expect(input.getAttribute('aria-describedby')).to.equal('credential-field-apiKey-warning');
+    expect(getByRole('button', { name: 'Create and select' }).disabled).to.be.false;
+  });
+
+
+  it('should link to the secret management docs for a missing secret reference', function() {
+
+    // when
+    const { getByRole } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'camunda.secrets.MISSING' },
+      secretReferences: []
+    });
+
+    // then
+    const link = getByRole('link', { name: 'Learn more' });
+
+    expect(link.href).to.match(/^https:\/\/docs\.camunda\.io\/docs\/components\/concepts\/secrets\//);
+    expect(link.target).to.equal('_blank');
+  });
+
+
+  it('should not warn when the secret reference exists', function() {
+
+    // when
+    const { queryByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'camunda.secrets.PRESENT' },
+      secretReferences: [ 'camunda.secrets.PRESENT' ]
+    });
+
+    // then
+    expect(queryByText(/does not exist on the connected Camunda instance/)).not.to.exist;
+  });
+
+
+  it('should warn about a missing reference beyond an existing one', function() {
+
+    // when: the engine resolves every occurrence — an existing first reference
+    // must not suppress the missing second one
+    const { getByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'camunda.secrets.PRESENT camunda.secrets.MISSING' },
+      secretReferences: [ 'camunda.secrets.PRESENT' ]
+    });
+
+    // then
+    expect(getByText(/does not exist on the connected Camunda instance/)).to.exist;
+  });
+
+
+  it('should read a doubled prefix as the reference to `camunda`', function() {
+
+    // when: the reference must start at a token boundary (name charset and `.`),
+    // so the nested `camunda.secrets.` is part of the first name; the value
+    // holds the single reference `camunda.secrets.camunda`, resolved or not
+    const { getByText, queryByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'camunda.secrets.camunda.secrets.B' },
+      secretReferences: [ 'camunda.secrets.B' ]
+    });
+
+    // then
+    expect(queryByText(/exposes sensitive information/)).not.to.exist;
+    expect(getByText(/does not exist on the connected Camunda instance/)).to.exist;
+    expect(queryByText(/Incomplete secret reference/)).not.to.exist;
+  });
+
+
+  it('should not match a reference inside another token', function() {
+
+    // when: `foo.camunda.secrets.B` is a single token, not a reference
+    const { getByText, queryByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'foo.camunda.secrets.B' },
+      secretReferences: [ 'camunda.secrets.B' ]
+    });
+
+    // then
+    expect(getByText(/exposes sensitive information/)).to.exist;
+    expect(queryByText(/does not exist on the connected Camunda instance/)).not.to.exist;
+  });
+
+
+  it('should warn about a plain-text value in a secret field', function() {
+
+    // when
+    const { getByLabelText, getByRole, getByText } = renderModal({
+      mode: 'create',
+      displayName: 'My cred',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'hunter2' }
+    });
+
+    // then
+    const input = getByLabelText('API key');
+
+    expect(getByText(/exposes sensitive information/)).to.exist;
+    expect(input.closest('.credential-modal-field').hasAttribute('data-warning')).to.be.true;
+    expect(input.getAttribute('aria-invalid')).to.be.null;
+    expect(input.getAttribute('aria-describedby')).to.equal('credential-field-apiKey-warning');
+    expect(getByRole('button', { name: 'Create and select' }).disabled).to.be.false;
+  });
+
+
+  it('should link to the secret management docs for a plain-text secret value', function() {
+
+    // when
+    const { getByRole } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'hunter2' }
+    });
+
+    // then
+    const link = getByRole('link', { name: 'Learn more' });
+
+    expect(link.href).to.match(/^https:\/\/docs\.camunda\.io\/docs\/components\/concepts\/secrets\//);
+  });
+
+
+  it('should warn about a bare secret reference prefix (incomplete, stored verbatim)', function() {
+
+    // when
+    const { getByLabelText, getByRole, getByText, queryByText } = renderModal({
+      mode: 'create',
+      displayName: 'My cred',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'camunda.secrets.' }
+    });
+
+    // then
+    const input = getByLabelText('API key');
+
+    expect(getByText(/Incomplete secret reference/)).to.exist;
+    expect(queryByText(/exposes sensitive information/)).not.to.exist;
+    expect(input.getAttribute('aria-invalid')).to.be.null;
+    expect(getByRole('button', { name: 'Create and select' }).disabled).to.be.false;
+  });
+
+
+  it('should link to the secret management docs for an incomplete secret reference', function() {
+
+    // when
+    const { getByRole } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'camunda.secrets.' }
+    });
+
+    // then
+    const link = getByRole('link', { name: 'Learn more' });
+
+    expect(link.href).to.match(/^https:\/\/docs\.camunda\.io\/docs\/components\/concepts\/secrets\//);
+  });
+
+
+
+  it('should not warn about a complete secret reference', function() {
+
+    // when
+    const { queryByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'camunda.secrets.PASSWORD' },
+      secretReferences: [ 'camunda.secrets.PASSWORD' ]
+    });
+
+    // then
+    expect(queryByText(/exposes sensitive information/)).not.to.exist;
+  });
+
+
+  it('should never flag a non-secret field as plain text', function() {
+
+    // when
+    const { queryByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(OPTIONAL_FIELD),
+      initialValues: { token: 'hunter2' }
+    });
+
+    // then
+    expect(queryByText(/exposes sensitive information/)).not.to.exist;
+  });
+
+
+  it('should never flag a plain-text dropdown value', function() {
+
+    // when
+    const { queryByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template({
+        id: 'type',
+        label: 'Type',
+        type: 'Dropdown',
+        secret: true,
+        choices: [ { name: 'Custom', value: 'hunter2' } ],
+        value: 'hunter2',
+        binding: { type: 'property', name: 'type' }
+      })
+    });
+
+    // then
+    expect(queryByText(/exposes sensitive information/)).not.to.exist;
+  });
+
+
+  it('should prioritize the plain-text warning over the incomplete-reference warning', function() {
+
+    // when: the value holds the prefix but no name — padding makes it plain text,
+    // not an incomplete reference
+    const { getByLabelText, getByText, queryByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'camunda.secrets. ' },
+      secretReferences: []
+    });
+
+    // then
+    expect(getByText(/exposes sensitive information/)).to.exist;
+    expect(queryByText(/Incomplete secret reference/)).not.to.exist;
+    expect(getByLabelText('API key').getAttribute('aria-invalid')).to.be.null;
+  });
+
+
+  it('should not warn when a reference is embedded in surrounding text', function() {
+
+    // when: the engine resolves the reference substring, keeping the literal
+    // surroundings — an explicitly chosen mix, not plain text
+    const { getByLabelText, getByText, queryByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'camunda.secrets.MISSING + b' },
+      secretReferences: []
+    });
+
+    // then
+    expect(queryByText(/exposes sensitive information/)).not.to.exist;
+    expect(getByText(/does not exist on the connected Camunda instance/)).to.exist;
+    expect(getByLabelText('API key').getAttribute('aria-describedby')).to.equal('credential-field-apiKey-warning');
+  });
+
+
+  it('should not warn about a padded but resolvable reference', function() {
+
+    // when: the engine matches the reference substring regardless of padding,
+    // so the value is not plain text
+    const { queryByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: ' camunda.secrets.PASSWORD ' },
+      secretReferences: [ 'camunda.secrets.PASSWORD' ]
+    });
+
+    // then
+    expect(queryByText(/exposes sensitive information/)).not.to.exist;
+    expect(queryByText(/does not exist on the connected Camunda instance/)).not.to.exist;
+  });
+
+
+  it('should warn about whitespace-only secret values', function() {
+
+    // when: a whitespace-only value is stored verbatim like any plain text
+    const { getByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: '   ' }
+    });
+
+    // then
+    expect(getByText(/exposes sensitive information/)).to.exist;
+  });
+
+
+  it('should recognize a dashed secret reference', function() {
+
+    // when: the engine charset allows dashes in secret names
+    const { queryByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'camunda.secrets.my-name' },
+      secretReferences: [ 'camunda.secrets.my-name' ]
+    });
+
+    // then
+    expect(queryByText(/exposes sensitive information/)).not.to.exist;
+    expect(queryByText(/does not exist on the connected Camunda instance/)).not.to.exist;
+  });
+
+
+  it('should not warn about a missing reference in a secret dropdown', function() {
+
+    // when: dropdown values are choice-constrained, so no secret semantics apply
+    const { queryByText } = renderModal({
+      mode: 'create',
+      configurationTemplate: template({
+        id: 'type',
+        label: 'Type',
+        type: 'Dropdown',
+        secret: true,
+        choices: [ { name: 'Missing', value: 'camunda.secrets.MISSING' } ],
+        value: 'camunda.secrets.MISSING',
+        binding: { type: 'property', name: 'type' }
+      }),
+      secretReferences: []
+    });
+
+    // then
+    expect(queryByText(/does not exist on the connected Camunda instance/)).not.to.exist;
+    expect(queryByText(/exposes sensitive information/)).not.to.exist;
+  });
+
+
+  it('should still allow submission with a plain-text secret value', function() {
+
+    // when
+    const { getByRole } = renderModal({
+      mode: 'create',
+      displayName: 'My cred',
+      configurationTemplate: template(SECRET_FIELD),
+      initialValues: { apiKey: 'hunter2' }
+    });
+
+    // then
+    expect(getByRole('button', { name: 'Create and select' }).disabled).to.be.false;
+  });
+
+
+  it('should render a description link', function() {
+
+    // when
+    const { getByRole } = renderModal({
+      mode: 'create',
+      configurationTemplate: template(DESCRIBED_FIELD)
+    });
+
+    // then
+    expect(getByRole('link', { name: 'docs' }).href).to.eql('https://docs.camunda.io/');
+  });
+
+
+  it('should call onClose when cancel is clicked', function() {
+
+    // given
+    const onClose = sinon.spy();
+
+    const { getByRole } = renderModal({ mode: 'create', onClose });
+
+    // when
+    fireEvent.click(getByRole('button', { name: 'Cancel' }));
+
+    // then
+    expect(onClose).to.have.been.calledOnce;
+  });
+
+});
+
+
+// helpers //////////
+
+function template(field = OPTIONAL_FIELD) {
+  return {
+    id: 'io.camunda:test-credential:1',
+    version: 1,
+    properties: [ field ]
+  };
+}
+
+function conditionalTemplate(condition) {
+  return {
+    id: 'io.camunda:test-credential:1',
+    version: 1,
+    properties: [
+      {
+        id: 'source',
+        label: 'Source',
+        type: 'String',
+        binding: { type: 'property', name: 'source' }
+      },
+      {
+        id: 'type',
+        label: 'Type',
+        type: 'String',
+        binding: { type: 'property', name: 'type' }
+      },
+      {
+        id: 'conditional',
+        label: 'Conditional field',
+        type: 'String',
+        condition,
+        binding: { type: 'property', name: 'conditional' }
+      }
+    ]
+  };
+}
+
+function renderModal(props = {}) {
+  return render(<CredentialModal { ...modalProps(props) } />);
+}
+
+async function selectOption(trigger, label) {
+  await userEvent.click(trigger);
+  await userEvent.click(screen.getByRole('option', { name: label }));
+}
+
+function modalProps(props = {}) {
+  const configurationTemplate = props.configurationTemplate || template();
+
+  return {
+    mode: 'create',
+    configurationTemplate,
+    existingCredentials: [],
+    initialValues: getInitialFieldValues(configurationTemplate.properties),
+    loading: false,
+    secretReferences: null,
+    displayName: '',
+    credentialName: '',
+    onSubmit: sinon.spy(),
+    onClose: sinon.spy(),
+    ...props
+  };
+}

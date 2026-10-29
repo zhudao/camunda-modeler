@@ -183,6 +183,72 @@ describe('FileContext', function() {
   });
 
 
+  describe('reset', function() {
+
+    it('should remove all indexed items', async function() {
+
+      // given
+      const filePath = path.resolve(__dirname, './tmp/foo-process-application/foo.bpmn');
+
+      await waitForEvent(() => {
+        fileContext.addFile(filePath);
+      });
+
+      expectItemsLength(fileContext, 1);
+
+      // when
+      fileContext.reset();
+
+      // then
+      expectItemsLength(fileContext, 0);
+    });
+
+
+    it('should remove all roots', async function() {
+
+      // given
+      const directoryPath = path.resolve(__dirname, './tmp/foo-process-application');
+
+      await waitForEvent(() => {
+        fileContext.addRoot(directoryPath);
+      }, 'watcher:ready');
+
+      expectRootsLength(fileContext, 1);
+
+      // when
+      fileContext.reset();
+
+      // then
+      expectRootsLength(fileContext, 0);
+      expectItemsLength(fileContext, 0);
+    });
+
+
+    it('should allow re-adding a file after reset', async function() {
+
+      // given
+      const filePath = path.resolve(__dirname, './tmp/foo-process-application/foo.bpmn'),
+            uri = toFileUrl(filePath);
+
+      await waitForEvent(() => {
+        fileContext.addFile(filePath);
+      });
+
+      fileContext.reset();
+
+      // when
+      await waitForEvent(() => {
+        fileContext.addFile(filePath);
+      });
+
+      // then
+      expectItemsLength(fileContext, 1);
+      expect(getItem(fileContext, uri)).to.exist;
+    });
+
+  });
+
+
   describe('watching', function() {
 
     it('should watch by default', function() {
@@ -213,6 +279,24 @@ describe('FileContext', function() {
       expect(getItem(fileContext, toFileUrl(path.resolve(__dirname, './tmp/foo-process-application/bar/baz/baz.dmn')))).to.exist;
       expect(getItem(fileContext, toFileUrl(path.resolve(__dirname, './tmp/foo-process-application/bar/baz/baz.form')))).to.exist;
       expect(getItem(fileContext, toFileUrl(path.resolve(__dirname, './tmp/foo-process-application/bar/baz/baz.rpa')))).to.exist;
+    });
+
+
+    it('adding Camunda project root', async function() {
+
+      // given
+      const directoryPath = path.resolve(__dirname, './tmp/camunda-project');
+
+      // when
+      await waitForEvent(() => {
+        fileContext.addRoot(directoryPath);
+      }, 'watcher:ready');
+
+      // then
+      expectRootsLength(fileContext, 1);
+      expectItemsLength(fileContext, 1);
+
+      expect(getItem(fileContext, toFileUrl(path.resolve(directoryPath, 'camunda.json')))).to.exist;
     });
 
 
@@ -615,10 +699,10 @@ describe('FileContext', function() {
     });
 
 
-    it('process application file', async function() {
+    it('Camunda project file', async function() {
 
       // given
-      const filePath = path.resolve(__dirname, './tmp/foo-process-application/.process-application'),
+      const filePath = path.resolve(__dirname, './tmp/camunda-project/camunda.json'),
             uri = toFileUrl(filePath);
 
       // when
@@ -634,7 +718,28 @@ describe('FileContext', function() {
       expect(item).to.exist;
 
       expect(item.metadata).to.eql({
-        'type': 'processApplication'
+        'type': 'camundaProject'
+      });
+    });
+
+
+    it('legacy Camunda project file', async function() {
+
+      // given
+      const filePath = path.resolve(__dirname, './tmp/extensions/.process-application'),
+            uri = toFileUrl(filePath);
+
+      // when
+      await waitForEvent(() => {
+        fileContext.addFile(filePath);
+      });
+
+      // then
+      const item = getItem(fileContext, uri);
+
+      expect(item).to.exist;
+      expect(item.metadata).to.eql({
+        'type': 'camundaProject'
       });
     });
 

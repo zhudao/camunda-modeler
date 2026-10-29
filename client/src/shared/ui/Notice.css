@@ -1,0 +1,42 @@
+:local(.Notice) {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+
+  /* span the full dialog width, between the title and the scrolling body */
+  margin-inline: -24px;
+  padding: 12px 24px;
+
+  border-block: 1px solid var(--border);
+
+  font-size: var(--text-sm);
+  line-height: 20px;
+
+  .icon {
+    /* pin the icon to the first line of a potentially multi-line notice */
+    display: inline-flex;
+    flex-shrink: 0;
+    height: 20px;
+    align-items: center;
+  }
+
+  &.info {
+    background-color: var(--info-background-subtle);
+  }
+
+  &.success {
+    background-color: var(--success-background-subtle);
+  }
+
+  &.warning {
+    background-color: var(--warning-background-subtle);
+  }
+
+  &.error {
+    background-color: var(--danger-background-subtle);
+  }
+
+  .content {
+    min-width: 0;
+  }
+}

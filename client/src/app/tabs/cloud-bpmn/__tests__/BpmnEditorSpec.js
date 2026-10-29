@@ -11,7 +11,7 @@
 import { expect } from 'chai';
 import * as sinon from 'sinon';
 
-import { waitFor, fireEvent, getByRole } from '@testing-library/react';
+import { act, waitFor, fireEvent, getByRole } from '@testing-library/react';
 
 import { find } from 'min-dash';
 
@@ -34,6 +34,8 @@ import patchEngineProfileXML from '../../__tests__/EngineProfile.patch.cloud.bpm
 import namespaceEngineProfileXML from '../../__tests__/EngineProfile.namespace.cloud.bpmn';
 
 import applyDefaultTemplates from '../../bpmn-shared/modeler/features/apply-default-templates/applyDefaultTemplates';
+
+import FeelPlayground from '../modeler/features/feel-playground/FeelPlayground';
 
 import {
   getCanvasEntries,
@@ -109,6 +111,7 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
       // then
       expect(createSpy).not.to.have.been.called;
     });
+
 
   });
 
@@ -234,6 +237,7 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
       },
       onError: onErrorSpy,
       onAction: noop,
+      emit: noop,
       settings
     };
 
@@ -374,16 +378,19 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
 
     describe('behavior', function() {
 
-      let modeler,
+      let cache,
+          instance,
+          modeler,
           onActionSpy,
-          rerender;
+          rerender,
+          unmount;
 
       beforeEach(async function() {
         modeler = new BpmnModeler();
 
         onActionSpy = spy();
 
-        const cache = new Cache();
+        cache = new Cache();
 
         cache.add('editor', {
           cached: {
@@ -398,7 +405,9 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
           onAction: onActionSpy
         });
 
+        instance = render.instance;
         rerender = render.rerender;
+        unmount = render.unmount;
       });
 
 
@@ -406,6 +415,10 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
 
         // then
         await waitFor(() => {
+
+          // flush the pending lint instead of waiting out the debounce
+          instance.linting.flush();
+
           const matchingCalls = onActionSpy.getCalls().filter(call => call.calledWithMatch('lint-tab'));
           expect(matchingCalls).to.have.lengthOf(1);
         });
@@ -418,6 +431,8 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
 
         // when
         modeler._emit('commandStack.changed');
+
+        instance.linting.flush();
 
         // then
         expect(onActionSpy).to.have.been.calledOnce;
@@ -435,11 +450,40 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
 
           modeler._emit('commandStack.changed');
 
+          instance.linting.flush();
+
           // then
           expect(onActionSpy).to.have.been.calledOnce;
           expect(onActionSpy).to.have.been.calledWithMatch('lint-tab');
         }
       );
+
+
+      it('should resume pending lint on remount', async function() {
+
+        // given
+        instance.linting.flush();
+        onActionSpy.resetHistory();
+
+        modeler._emit('commandStack.changed');
+        unmount();
+
+        // when
+        const { instance: remountedInstance } = await renderEditor(diagramXML, {
+          id: 'editor',
+          cache,
+          onAction: onActionSpy,
+          waitForImport: false
+        });
+
+        remountedInstance.linting.flush();
+
+        // then
+        const matchingCalls = onActionSpy.getCalls()
+          .filter(call => call.calledWithMatch('lint-tab'));
+
+        expect(matchingCalls).to.have.lengthOf(1);
+      });
 
     });
 
@@ -587,6 +631,96 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
 
         // then
         expect(instance.getModeler().get('linting').isActive()).to.be.false;
+      });
+
+
+      it('should not activate while importing (#6049)', async function() {
+
+        // given
+        const { instance } = await renderEditor(diagramXML, {
+          layout: {
+            panel: {
+              open: true,
+              tab: 'linting'
+            }
+          }
+        });
+
+        const linting = instance.getModeler().get('linting');
+
+        const activateSpy = spy(linting, 'activate'),
+              deactivateSpy = spy(linting, 'deactivate');
+
+        // assume a (re-)import is in progress
+        await new Promise(resolve => instance.setState({ importing: true }, resolve));
+
+        // when
+        instance.componentDidUpdate(instance.props);
+
+        // then
+        expect(activateSpy).not.to.have.been.called;
+        expect(deactivateSpy).not.to.have.been.called;
+      });
+
+
+      it('should not deactivate while importing (#6049)', async function() {
+
+        // given
+        const { instance } = await renderEditor(diagramXML, {
+          layout: {
+            panel: {
+              open: false
+            }
+          }
+        });
+
+        const linting = instance.getModeler().get('linting');
+
+        const activateSpy = spy(linting, 'activate'),
+              deactivateSpy = spy(linting, 'deactivate');
+
+        // assume a (re-)import is in progress
+        await new Promise(resolve => instance.setState({ importing: true }, resolve));
+
+        // when
+        instance.componentDidUpdate(instance.props);
+
+        // then
+        expect(deactivateSpy).not.to.have.been.called;
+        expect(activateSpy).not.to.have.been.called;
+      });
+
+
+      it('should not toggle while an import is pending (#6049)', async function() {
+
+        // given
+        const { instance } = await renderEditor(diagramXML, {
+          layout: {
+            panel: {
+              open: true,
+              tab: 'linting'
+            }
+          }
+        });
+
+        // props are out of sync with the imported diagram => import pending
+        instance.setCached({ lastXML: '<foo />' });
+
+        await waitFor(() => {
+          expect(instance.getCached().lastXML).to.equal('<foo />');
+        });
+
+        const linting = instance.getModeler().get('linting');
+
+        const activateSpy = spy(linting, 'activate'),
+              deactivateSpy = spy(linting, 'deactivate');
+
+        // when re-rendered before the pending import completes
+        instance.componentDidUpdate({ ...instance.props, xml: 'previous' });
+
+        // then
+        expect(activateSpy).not.to.have.been.called;
+        expect(deactivateSpy).not.to.have.been.called;
       });
 
     });
@@ -1776,8 +1910,17 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
     it('should reload templates on action triggered', async function() {
 
       // given
-      const getConfigSpy = sinon.spy(),
-            elementTemplatesLoaderStub = sinon.stub({ setTemplates() {} });
+      // each fetch returns different templates so the reload is applied
+      let call = 0;
+
+      const getConfigStub = sinon.stub().callsFake(() => Promise.resolve([
+        {
+          '$schema': 'https://unpkg.com/@camunda/zeebe-element-templates-json-schema/resources/schema.json',
+          'id': `template-${ call++ }`
+        }
+      ]));
+
+      const elementTemplatesLoaderStub = sinon.stub({ setTemplates() {} });
 
       const cache = new Cache();
 
@@ -1794,19 +1937,61 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
       // when
       const { instance } = await renderEditor(diagramXML, {
         cache,
-        getConfig: getConfigSpy
+        getConfig: getConfigStub
       });
 
       await instance.triggerAction('elementTemplates.reload');
 
       // expect
-      expect(getConfigSpy).to.be.calledTwice;
-      expect(getConfigSpy).to.be.always.calledWith('bpmn.elementTemplates');
+      expect(getConfigStub).to.be.calledTwice;
+      expect(getConfigStub).to.be.always.calledWith('bpmn.elementTemplates');
       expect(elementTemplatesLoaderStub.setTemplates).to.be.calledTwice;
     });
 
 
-    it('should reload templates on save', async function() {
+    it('should not re-set unchanged templates on reload', async function() {
+
+      // given
+      const getConfigStub = sinon.stub().resolves([
+        {
+          '$schema': 'https://unpkg.com/@camunda/zeebe-element-templates-json-schema/resources/schema.json',
+          'id': 'template-1'
+        }
+      ]);
+
+      const setTemplatesSpy = sinon.spy();
+
+      const cache = new Cache();
+
+      cache.add('editor', {
+        cached: {
+          modeler: new BpmnModeler({
+            modules: {
+              elementTemplatesLoader: { setTemplates: setTemplatesSpy }
+            }
+          })
+        }
+      });
+
+      const { instance } = await renderEditor(diagramXML, {
+        cache,
+        getConfig: getConfigStub
+      });
+
+      // templates were set once on mount
+      expect(setTemplatesSpy).to.be.calledOnce;
+
+      // when
+      // reload fetches the same templates
+      await instance.triggerAction('elementTemplates.reload');
+
+      // then
+      // identical templates are not re-applied (no re-validation, linter kept)
+      expect(setTemplatesSpy).to.be.calledOnce;
+    });
+
+
+    it('should not reload templates on save (unchanged path)', async function() {
 
       // given
       const getConfigSpy = sinon.spy(),
@@ -1835,16 +2020,215 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
       setTemplatesSpy.resetHistory();
 
       // when
+      // save replaces the file object, but the path is unchanged
       rerender(diagramXML, {
         file: { path: '/bar' }
       });
 
       // expect
-      await waitFor(() => {
-        expect(getConfigSpy).to.be.calledOnce;
+      // templates are NOT re-fetched / re-validated on save
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(getConfigSpy).not.to.have.been.called;
+      expect(setTemplatesSpy).not.to.have.been.called;
+    });
+
+
+    it('should reload templates when file path changes', async function() {
+
+      // given
+      let call = 0;
+
+      const getConfigStub = sinon.stub().callsFake(() => Promise.resolve([
+        {
+          '$schema': 'https://unpkg.com/@camunda/zeebe-element-templates-json-schema/resources/schema.json',
+          'id': `template-${ call++ }`
+        }
+      ]));
+
+      const setTemplatesSpy = sinon.spy(),
+            elementTemplatesLoaderMock = { setTemplates: setTemplatesSpy };
+
+      const cache = new Cache();
+
+      cache.add('editor', {
+        cached: {
+          feelPlayground: new FeelPlayground(),
+          modeler: new BpmnModeler({
+            modules: {
+              elementTemplatesLoader: elementTemplatesLoaderMock
+            }
+          })
+        }
       });
-      expect(getConfigSpy).to.be.calledWith('bpmn.elementTemplates');
+
+      const { rerender } = await renderEditor(diagramXML, {
+        cache,
+        getConfig: getConfigStub,
+        file: { path: '/bar' }
+      });
+
+      getConfigStub.resetHistory();
+      setTemplatesSpy.resetHistory();
+
+      // when
+      // e.g. save-as to a new path, exposing different local templates
+      rerender(diagramXML, {
+        file: { path: '/baz' }
+      });
+
+      // expect
+      await waitFor(() => {
+        expect(getConfigStub).to.be.calledOnce;
+      });
+      expect(getConfigStub).to.be.calledWith('bpmn.elementTemplates');
       expect(setTemplatesSpy).to.be.calledOnce;
+    });
+
+
+    it('should reload templates when the app regains focus', async function() {
+
+      // given
+      // each fetch returns different templates so the reload is applied
+      let call = 0;
+
+      const getConfigStub = sinon.stub().callsFake(() => Promise.resolve([
+        {
+          '$schema': 'https://unpkg.com/@camunda/zeebe-element-templates-json-schema/resources/schema.json',
+          'id': `template-${ call++ }`
+        }
+      ]));
+
+      const setTemplatesSpy = sinon.spy(),
+            elementTemplatesLoaderMock = { setTemplates: setTemplatesSpy };
+
+      const cache = new Cache();
+
+      cache.add('editor', {
+        cached: {
+          modeler: new BpmnModeler({
+            modules: {
+              elementTemplatesLoader: elementTemplatesLoaderMock
+            }
+          })
+        }
+      });
+
+      const { emit } = await renderEditor(diagramXML, {
+        cache,
+        getConfig: getConfigStub
+      });
+
+      getConfigStub.resetHistory();
+      setTemplatesSpy.resetHistory();
+
+      // when
+      // an external process may have edited local templates while away
+      emit('app.focused');
+
+      // then
+      await waitFor(() => {
+        expect(getConfigStub).to.be.calledOnce;
+      });
+      expect(getConfigStub).to.be.calledWith('bpmn.elementTemplates');
+      expect(setTemplatesSpy).to.be.calledOnce;
+    });
+
+
+    it('should not re-set unchanged templates when the app regains focus', async function() {
+
+      // given
+      const getConfigStub = sinon.stub().resolves([
+        {
+          '$schema': 'https://unpkg.com/@camunda/zeebe-element-templates-json-schema/resources/schema.json',
+          'id': 'template-1'
+        }
+      ]);
+
+      const setTemplatesSpy = sinon.spy();
+
+      const cache = new Cache();
+
+      cache.add('editor', {
+        cached: {
+          modeler: new BpmnModeler({
+            modules: {
+              elementTemplatesLoader: { setTemplates: setTemplatesSpy }
+            }
+          })
+        }
+      });
+
+      const { emit } = await renderEditor(diagramXML, {
+        cache,
+        getConfig: getConfigStub
+      });
+
+      // templates were set once on mount
+      expect(setTemplatesSpy).to.be.calledOnce;
+
+      // when
+      // focus fetches the same templates
+      emit('app.focused');
+
+      // then
+      // identical templates are not re-applied (no re-validation, linter kept)
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(setTemplatesSpy).to.be.calledOnce;
+    });
+
+
+    it('should not reload templates on focus after unmount', async function() {
+
+      // given
+      let call = 0;
+
+      const getConfigStub = sinon.stub().callsFake(() => Promise.resolve([
+        {
+          '$schema': 'https://unpkg.com/@camunda/zeebe-element-templates-json-schema/resources/schema.json',
+          'id': `template-${ call++ }`
+        }
+      ]));
+
+      const { emit, unmount } = await renderEditor(diagramXML, {
+        getConfig: getConfigStub
+      });
+
+      getConfigStub.resetHistory();
+
+      // when
+      // the subscription is cancelled on unmount
+      unmount();
+
+      emit('app.focused');
+
+      // then
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(getConfigStub).not.to.have.been.called;
+    });
+
+
+    it('should invalidate linter and re-lint when element templates change', async function() {
+
+      // given
+      const onActionSpy = sinon.spy();
+
+      const { instance } = await renderEditor(diagramXML, {
+        onAction: onActionSpy
+      });
+
+      onActionSpy.resetHistory();
+
+      // when
+      instance.getModeler()._emit('elementTemplates.changed');
+
+      instance.linting.flush();
+
+      // then
+      // the app is asked to invalidate the cached linter for this tab ...
+      expect(onActionSpy).to.have.been.calledWith('element-templates-changed');
+
+      // ... and the editor re-lints through its own (debounced) path
+      expect(onActionSpy).to.have.been.calledWithMatch('lint-tab');
     });
 
 
@@ -1924,7 +2308,35 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
     });
 
 
-    it('should set templates engines when runtime version changes', async function() {
+    it('should set FEEL engines from imported runtime version', async function() {
+
+      // given
+      const modeler = new BpmnModeler();
+      const propertiesPanel = modeler.get('propertiesPanel');
+
+      sinon.spy(propertiesPanel, 'setFeelLanguageContext');
+
+      const cache = new Cache();
+
+      cache.add('editor', {
+        cached: {
+          modeler
+        }
+      });
+
+      // when
+      await renderEditor(engineProfileXML, { cache });
+
+      // then
+      expect(propertiesPanel.setFeelLanguageContext).to.be.calledWith({
+        engines: {
+          camunda: '1.1.0'
+        }
+      });
+    });
+
+
+    it('should set engines when runtime version changes', async function() {
 
       // given
       const appVersion = '5.30.0';
@@ -1936,15 +2348,21 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
         getEngines: () => ({ camundaDesktopModeler: appVersion })
       };
 
+      const modeler = new BpmnModeler({
+        modules: {
+          elementTemplates: elementTemplatesMock
+        }
+      });
+
+      const propertiesPanel = modeler.get('propertiesPanel');
+
+      sinon.spy(propertiesPanel, 'setFeelLanguageContext');
+
       const cache = new Cache();
 
       cache.add('editor', {
         cached: {
-          modeler: new BpmnModeler({
-            modules: {
-              elementTemplates: elementTemplatesMock
-            }
-          })
+          modeler
         }
       });
 
@@ -1963,6 +2381,46 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
       };
 
       expect(elementTemplatesMock.setEngines).to.be.calledWith(expectedEngines);
+      expect(propertiesPanel.setFeelLanguageContext).to.be.calledWith({
+        engines: {
+          camunda: '8.5'
+        }
+      });
+    });
+
+
+    it('should load element templates for existing diagram', async function() {
+
+      // given
+      const setTemplatesSpy = sinon.spy();
+
+      const cache = new Cache();
+
+      cache.add('editor', {
+        cached: {
+          modeler: new BpmnModeler({
+            modules: {
+              elementTemplatesLoader: { setTemplates: setTemplatesSpy }
+            }
+          })
+        }
+      });
+
+      // when
+      await renderEditor(engineProfileXML, {
+        cache,
+        isNew: false,
+        getConfig: () => Promise.resolve([
+          {
+            '$schema': 'https://unpkg.com/@camunda/zeebe-element-templates-json-schema/resources/schema.json',
+            'id': 'template-1'
+          }
+        ])
+      });
+
+      // then
+      // templates are loaded once, on import
+      expect(setTemplatesSpy).to.be.calledOnce;
     });
 
 
@@ -2066,6 +2524,23 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
       expect(warningSpy).to.have.been.calledWith({ message: error1.message });
       expect(warningSpy).to.have.been.calledWith({ message: error2.message });
       expect(warningSpy).to.have.been.calledWith({ message: error3.message });
+    });
+
+
+    it('should NOT warn when there are no template errors', async function() {
+
+      // given
+      const warningSpy = spy();
+
+      const { instance } = await renderEditor(diagramXML, {
+        onWarning: warningSpy
+      });
+
+      // when
+      await instance.handleElementTemplateErrors({ errors: [] });
+
+      // then
+      expect(warningSpy).not.to.have.been.called;
     });
 
   });
@@ -2409,8 +2884,8 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
     beforeEach(function() {
       emittedEvents = [];
 
-      recordActions = (action, options) => {
-        emittedEvents.push(options);
+      recordActions = (type, payload) => {
+        emittedEvents.push({ type, payload });
       };
     });
 
@@ -2418,7 +2893,7 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
 
       // when
       await renderEditor(diagramXML, {
-        onAction: recordActions
+        emit: recordActions
       });
 
       // then
@@ -2437,7 +2912,7 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
 
       // when
       const { instance } = await renderEditor(diagramXML, {
-        onAction: recordActions
+        emit: recordActions
       });
 
       // then
@@ -2522,20 +2997,17 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
     it('should emit tab.engineProfileChanged event on import', async function() {
 
       // given
-      const onActionSpy = sinon.spy();
+      const emitSpy = sinon.spy();
 
       // when
       await renderEditor(engineProfileXML, {
-        onAction: onActionSpy
+        emit: emitSpy
       });
 
       // then
-      expect(onActionSpy).to.have.been.calledWithMatch('emit-event', {
-        type: 'tab.engineProfileChanged',
-        payload: {
-          executionPlatform: 'Camunda Cloud',
-          executionPlatformVersion: '1.1.0'
-        }
+      expect(emitSpy).to.have.been.calledWithMatch('tab.engineProfileChanged', {
+        executionPlatform: 'Camunda Cloud',
+        executionPlatformVersion: '1.1.0'
       });
     });
 
@@ -2543,13 +3015,13 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
     it('should emit tab.engineProfileChanged event on set engine profile', async function() {
 
       // given
-      const onActionSpy = sinon.spy();
+      const emitSpy = sinon.spy();
 
       const { instance } = await renderEditor(engineProfileXML, {
-        onAction: onActionSpy
+        emit: emitSpy
       });
 
-      onActionSpy.resetHistory();
+      emitSpy.resetHistory();
 
       // when
       instance.engineProfile.set({
@@ -2558,13 +3030,43 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
       });
 
       // then
-      expect(onActionSpy).to.have.been.calledWithMatch('emit-event', {
-        type: 'tab.engineProfileChanged',
-        payload: {
-          executionPlatform: 'Camunda Cloud',
-          executionPlatformVersion: '1.2.0'
-        }
+      expect(emitSpy).to.have.been.calledWithMatch('tab.engineProfileChanged', {
+        executionPlatform: 'Camunda Cloud',
+        executionPlatformVersion: '1.2.0'
       });
+    });
+
+
+    it('should NOT emit tab.engineProfileChanged event when engine profile unchanged', async function() {
+
+      // given
+      const emitSpy = sinon.spy();
+      const cache = new Cache();
+
+      const { unmount } = await renderEditor(engineProfileXML, {
+        cache,
+        emit: emitSpy,
+        id: 'editor'
+      });
+
+      emitSpy.resetHistory();
+      unmount();
+
+      const { instance } = await renderEditor(engineProfileXML, {
+        cache,
+        emit: emitSpy,
+        id: 'editor',
+        waitForImport: false
+      });
+
+      // when
+      instance.engineProfile.setCached({
+        executionPlatform: 'Camunda Cloud',
+        executionPlatformVersion: '1.1.0'
+      });
+
+      // then
+      expect(emitSpy).not.to.have.been.calledWith('tab.engineProfileChanged');
     });
 
   });
@@ -2597,6 +3099,52 @@ describe('cloud-bpmn - <BpmnEditor>', function() {
       expect(instance).to.exist;
       expect(instance.getModeler().additionalModules).to.exist;
       expect(instance.getModeler().additionalModules).to.have.length(1);
+    });
+
+  });
+
+
+  describe('FEEL expression evaluation', function() {
+
+    it('should update playground configuration when the connection changes', async function() {
+
+      // given
+      const { instance, emit } = await renderEditor(diagramXML);
+      const { feelPlayground } = instance.getCached();
+      const setConfigSpy = sinon.spy(feelPlayground, 'setConfig');
+
+      // when
+      act(() => emit('connectionManager.connectionStatusChanged', {
+        connection: { id: 'cluster' },
+        response: { gatewayVersion: '8.9.0' },
+        success: true
+      }));
+
+      // then
+      expect(setConfigSpy).to.have.been.calledOnce;
+      expect(setConfigSpy.firstCall.args[0].onEvaluate).to.be.a('function');
+    });
+
+
+    it('should update playground file when the path changes', async function() {
+
+      // given
+      const { instance, rerender } = await renderEditor(diagramXML, {
+        file: { path: '/tmp/source.bpmn' }
+      });
+      const { feelPlayground } = instance.getCached();
+      const setFileSpy = sinon.spy(feelPlayground, 'setFile');
+
+      // when
+      rerender(diagramXML, {
+        file: { path: '/tmp/copy.bpmn' }
+      });
+
+      // then
+      await waitFor(() => {
+        expect(setFileSpy).to.have.been.calledOnce;
+      });
+      expect(setFileSpy.firstCall.args[0]).to.eql({ path: '/tmp/copy.bpmn' });
     });
 
   });

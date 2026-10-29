@@ -11,6 +11,7 @@
 const Config = require('..');
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const sinon = require('sinon');
@@ -274,6 +275,339 @@ describe('Config', function() {
       ]);
     });
 
+
+    it('should reuse cached templates when files are unchanged', function() {
+
+      // given
+      const file = {
+        path: getAbsolutePath('fixtures/project/bar.bpmn')
+      };
+
+      const config = new Config({
+        resourcesPaths: [
+          getAbsolutePath('fixtures/ok')
+        ],
+        userPath: 'foo'
+      });
+
+      const readFileSync = sinon.spy(fs, 'readFileSync');
+
+      const templateReadCount = () => readFileSync.getCalls().filter(
+        call => call.args[0].includes('element-templates')
+      ).length;
+
+      try {
+
+        // when
+        config.get('bpmn.elementTemplates', file);
+
+        const readsAfterFirst = templateReadCount();
+
+        config.get('bpmn.elementTemplates', file);
+
+        const readsAfterSecond = templateReadCount();
+
+        // then
+        // the second get reuses the cache, adding no template file reads
+        expect(readsAfterFirst).to.be.above(0);
+        expect(readsAfterSecond).to.equal(readsAfterFirst);
+      } finally {
+        readFileSync.restore();
+      }
+    });
+
+
+    it('should re-read a template when its file changes', function() {
+
+      // given
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'element-templates-'));
+      const templatesDir = path.join(tmpDir, 'element-templates');
+
+      fs.mkdirSync(templatesDir);
+
+      const templatePath = path.join(templatesDir, 'list.json');
+
+      fs.writeFileSync(templatePath, JSON.stringify([ { id: 'A' } ]));
+
+      const config = new Config({
+        resourcesPaths: [ tmpDir ],
+        userPath: 'foo'
+      });
+
+      try {
+
+        // when
+        const first = config.get('bpmn.elementTemplates', null);
+
+        // change the file, forcing a different modification time
+        fs.writeFileSync(templatePath, JSON.stringify([ { id: 'B' } ]));
+        fs.utimesSync(templatePath, new Date(), new Date(Date.now() + 1000));
+
+        const second = config.get('bpmn.elementTemplates', null);
+
+        // then
+        expect(first).to.eql([ { id: 'A' } ]);
+        expect(second).to.eql([ { id: 'B' } ]);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+
+    it('should skip a file that vanished between globbing and stat', function() {
+
+      // given
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'element-templates-'));
+      const templatesDir = path.join(tmpDir, 'element-templates');
+
+      fs.mkdirSync(templatesDir);
+
+      const keptPath = path.join(templatesDir, 'kept.json');
+      const vanishedPath = path.join(templatesDir, 'vanished.json');
+
+      fs.writeFileSync(keptPath, JSON.stringify([ { id: 'kept' } ]));
+      fs.writeFileSync(vanishedPath, JSON.stringify([ { id: 'vanished' } ]));
+
+      const config = new Config({
+        resourcesPaths: [ tmpDir ],
+        userPath: 'foo'
+      });
+
+      // globbing returns POSIX-style paths (forward slashes) on all platforms,
+      // so normalize before comparing to the native `path.join` result
+      const toPosix = p => p.split(path.sep).join(path.posix.sep);
+
+      // simulate the file disappearing after it was globbed
+      const statSync = sinon.stub(fs, 'statSync').callsFake(function(target, ...args) {
+        if (toPosix(target) === toPosix(vanishedPath)) {
+          const error = new Error('ENOENT');
+
+          error.code = 'ENOENT';
+
+          throw error;
+        }
+
+        return statSync.wrappedMethod.call(fs, target, ...args);
+      });
+
+      try {
+
+        // when
+        const templates = config.get('bpmn.elementTemplates', null);
+
+        // then
+        // the vanished file is skipped, not surfaced as an error, and the
+        // remaining templates are still returned
+        expect(templates).to.eql([ { id: 'kept' } ]);
+      } finally {
+        statSync.restore();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+
+    it('should not evict another scope\'s cached templates', function() {
+
+      // given
+      // two independent "projects", each with its own local
+      // `.camunda/element-templates`; local dirs are derived from
+      // `parents(path.dirname(file.path))`, so the templates must live under
+      // `<project>/.camunda/element-templates`
+      const projectA = fs.mkdtempSync(path.join(os.tmpdir(), 'element-templates-a-'));
+      const projectB = fs.mkdtempSync(path.join(os.tmpdir(), 'element-templates-b-'));
+
+      const templateA = path.join(projectA, '.camunda', 'element-templates', 'a.json');
+      const templateB = path.join(projectB, '.camunda', 'element-templates', 'b.json');
+
+      fs.mkdirSync(path.dirname(templateA), { recursive: true });
+      fs.mkdirSync(path.dirname(templateB), { recursive: true });
+
+      fs.writeFileSync(templateA, JSON.stringify([ { id: 'A' } ]));
+      fs.writeFileSync(templateB, JSON.stringify([ { id: 'B' } ]));
+
+      const fileA = { path: path.join(projectA, 'a.bpmn') };
+      const fileB = { path: path.join(projectB, 'b.bpmn') };
+
+      const config = new Config({
+        resourcesPaths: [],
+        userPath: 'foo'
+      });
+
+      const readFileSync = sinon.spy(fs, 'readFileSync');
+
+      // globbing returns POSIX-style paths (forward slashes) on all platforms,
+      // so normalize before comparing to the native `path.join` result
+      const toPosix = p => p.split(path.sep).join(path.posix.sep);
+
+      const templateAReadCount = () => readFileSync.getCalls().filter(
+        call => toPosix(String(call.args[0])) === toPosix(templateA)
+      ).length;
+
+      try {
+
+        // when
+        config.get('bpmn.elementTemplates', fileA);
+
+        const readsAfterA = templateAReadCount();
+
+        // switching to another project must not evict project A's scope cache
+        config.get('bpmn.elementTemplates', fileB);
+
+        config.get('bpmn.elementTemplates', fileA);
+
+        const readsAfterReturn = templateAReadCount();
+
+        // then
+        // project A's template was read once and is still cached after the
+        // intervening `get` for project B - it is not re-read on return
+        expect(readsAfterA).to.equal(1);
+        expect(readsAfterReturn).to.equal(1);
+      } finally {
+        readFileSync.restore();
+        fs.rmSync(projectA, { recursive: true, force: true });
+        fs.rmSync(projectB, { recursive: true, force: true });
+      }
+    });
+
+  });
+
+
+  describe('remote template sources', function() {
+
+    let userPath, resourcesPath, ootbPath, sourceAPath, sourceBPath;
+
+    const ootb = [
+      { id: 'foo', version: 1, name: 'OOTB v1' },
+      { id: 'foo', version: 2, name: 'OOTB v2' },
+      { id: 'foo', version: 3, name: 'OOTB v3' }
+    ];
+    const sourceA = [ { id: 'foo', version: 2, name: 'A v2' } ];
+    const sourceB = [ { id: 'foo', version: 2, name: 'B v2' } ];
+
+    beforeEach(function() {
+      userPath = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-templates-'));
+      resourcesPath = path.join(userPath, 'resources [custom] (templates)');
+      const directory = path.join(resourcesPath, 'element-templates');
+      fs.mkdirSync(directory, { recursive: true });
+      ootbPath = path.join(directory, '.camunda-connector-templates.json');
+      sourceAPath = path.join(directory, '.z-source.json');
+      sourceBPath = path.join(directory, '.a-source.json');
+      writeTemplates(ootbPath, ootb);
+      writeTemplates(sourceAPath, sourceA);
+      writeTemplates(sourceBPath, sourceB);
+    });
+
+    afterEach(function() {
+      sinon.restore();
+      fs.rmSync(userPath, { recursive: true, force: true });
+    });
+
+
+    it('should merge all remote caches without de-duplication', function() {
+
+      // given
+      const config = createConfig();
+
+      // when
+      const templates = config.get('bpmn.elementTemplates');
+
+      // then
+      // collisions between sources are surfaced by the client-side template
+      // validator, not resolved here
+      expect(templates).to.have.deep.members([ ...ootb, ...sourceA, ...sourceB ]);
+    });
+
+
+    it('should preserve manually installed, project and config templates', function() {
+
+      // given
+      const manual = { ...sourceA[0], name: 'Manual' };
+      const local = { ...sourceA[0], name: 'Project' };
+      const legacy = { ...sourceA[0], name: 'Config' };
+      writeTemplates(path.join(resourcesPath, 'element-templates', 'manual.json'), [ manual ]);
+      const projectTemplates = path.join(userPath, 'project', '.camunda', 'element-templates');
+      fs.mkdirSync(projectTemplates, { recursive: true });
+      writeTemplates(path.join(projectTemplates, 'local.json'), [ local ]);
+      const config = createConfig();
+      config.set('elementTemplates', [ legacy ]);
+
+      // when
+      const templates = config.get('bpmn.elementTemplates', { path: path.join(userPath, 'project', 'diagram.bpmn') });
+
+      // then
+      expect(templates).to.have.deep.members([ local, manual, legacy, ...ootb, ...sourceA, ...sourceB ]);
+      expect(templates[0]).to.eql(local);
+      expect(templates[templates.length - 1]).to.eql(legacy);
+    });
+
+
+    it('should ignore a removed source under a path containing glob characters', function() {
+
+      // given
+      const config = createConfig({
+        ignoredPaths: [ sourceBPath ]
+      });
+
+      // when
+      const templates = config.get('bpmn.elementTemplates');
+
+      // then
+      expect(templates).to.have.deep.members([ ...ootb, ...sourceA ]);
+      expect(fs.existsSync(sourceBPath)).to.be.true;
+    });
+
+
+    it('should load remaining caches when one cache is absent', function() {
+
+      // given
+      fs.unlinkSync(sourceBPath);
+      const config = createConfig();
+
+      // when
+      const templates = config.get('bpmn.elementTemplates');
+
+      // then
+      expect(templates).to.have.deep.members([ ...ootb, ...sourceA ]);
+    });
+
+
+    it('should reuse parses and leave cached arrays and objects unchanged', function() {
+
+      // given
+      const config = createConfig();
+      const first = config.get('bpmn.elementTemplates');
+      const provider = config._providers['bpmn.elementTemplates'];
+      for (const scope of provider._cache.values()) {
+        for (const { templates } of scope.values()) {
+          templates.forEach(Object.freeze);
+          Object.freeze(templates);
+        }
+      }
+      const read = sinon.spy(fs, 'readFileSync');
+
+      // when
+      const second = config.get('bpmn.elementTemplates');
+
+      // then
+      expect(second).to.eql(first);
+      second.forEach((template, index) => expect(template).to.equal(first[index]));
+      expect(read).not.to.have.been.called;
+      const cachedA = [ ...provider._cache.values() ][0].get(sourceAPath.split(path.sep).join('/'));
+      expect(cachedA.templates).to.eql(sourceA);
+    });
+
+
+    function createConfig(options = {}) {
+      return new Config({
+        userPath,
+        resourcesPaths: [ resourcesPath ],
+        ...options
+      });
+    }
+
+    function writeTemplates(file, templates) {
+      fs.writeFileSync(file, JSON.stringify(templates));
+    }
   });
 
 

@@ -298,9 +298,8 @@ export class MultiSheetTab extends CachedComponent {
       lastXML: xml
     });
 
-    this.props.onAction('emit-event', {
-      type: 'tab.activeSheetChanged',
-      payload: { activeSheet: sheet }
+    this.props.emit('tab.activeSheetChanged', {
+      activeSheet: sheet
     });
   };
 
@@ -361,6 +360,13 @@ export class MultiSheetTab extends CachedComponent {
       });
     }
 
+    if (action === 'element-templates-changed') {
+      return onAction('element-templates-changed', {
+        ...options,
+        tab
+      });
+    }
+
     return onAction(action, options);
   };
 
@@ -397,6 +403,7 @@ export class MultiSheetTab extends CachedComponent {
             ref={ this.editorRef }
             file={ tab.file }
             id={ `${id}-${activeSheet.provider.type}` }
+            tabId={ id }
             xml={ lastXML || xml }
             isNew={ isNew }
             layout={ layout }
@@ -404,6 +411,7 @@ export class MultiSheetTab extends CachedComponent {
             onSheetsChanged={ this.sheetsChanged }
             onContextMenu={ this.handleContextMenu }
             onAction={ this.onAction }
+            emit={ this.props.emit }
             onChanged={ this.handleChanged }
             onContentUpdated={ this.handleContentUpdated }
             onError={ this.handleError }

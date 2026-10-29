@@ -407,32 +407,26 @@ describe('ConnectionManagerPlugin', function() {
           'connectionManagerPlugin.c8connections': DEFAULT_CONNECTIONS
         });
 
-        const triggerAction = sinon.spy();
+        const emit = sinon.spy();
 
         // when
         createConnectionManagerPlugin({
           getConnectionForTab: () => Promise.resolve(DEFAULT_CONNECTIONS[0]),
           subscribe,
           settings,
-          triggerAction,
+          emit,
           connectionCheckResult: { success: true }
         });
 
-        // make React state settle
-        await waitForNextCycle(3);
-
-        // advance past ConnectionChecker SHORT delay (1000ms)
-        await clock.tickAsync(2000);
+        // wait for the connection to resolve and the first check to run
+        await waitForStatusChanges(clock, emit, 1);
 
         // then
-        expect(triggerAction).to.have.been.calledWith(
-          'emit-event',
+        expect(emit).to.have.been.calledWith(
+          'connectionManager.connectionStatusChanged',
           sinon.match({
-            type: 'connectionManager.connectionStatusChanged',
-            payload: {
-              name: 'plugin',
-              success: true
-            }
+            name: 'plugin',
+            success: true
           })
         );
       });
@@ -459,12 +453,12 @@ describe('ConnectionManagerPlugin', function() {
           'connectionManagerPlugin.c8connections': DEFAULT_CONNECTIONS
         });
 
-        const triggerAction = sinon.spy();
+        const emit = sinon.spy();
         createConnectionManagerPlugin({
           getConnectionForTab: () => Promise.resolve(DEFAULT_CONNECTIONS[0]),
           subscribe,
           settings,
-          triggerAction,
+          emit,
           connectionCheckResult: { success: true }
         });
 
@@ -478,11 +472,9 @@ describe('ConnectionManagerPlugin', function() {
         await clock.tickAsync(2000);
 
         // then
-        expect(triggerAction).not.to.have.been.calledWith(
-          'emit-event',
-          sinon.match({
-            type: 'connectionManager.connectionStatusChanged'
-          })
+        expect(emit).not.to.have.been.calledWith(
+          'connectionManager.connectionStatusChanged',
+          sinon.match.any
         );
       });
 
@@ -507,29 +499,26 @@ describe('ConnectionManagerPlugin', function() {
             'connectionManagerPlugin.c8connections': DEFAULT_CONNECTIONS
           });
 
-          const triggerAction = sinon.spy();
+          const emit = sinon.spy();
 
           // when
           createConnectionManagerPlugin({
             getConnectionForTab: () => Promise.resolve(DEFAULT_CONNECTIONS[0]),
             subscribe,
             settings,
-            triggerAction,
+            emit,
           });
 
-          // make React state settle and let the connection resolve
-          await waitForNextCycle(3);
-          await clock.tickAsync(2000);
+          // wait for the active tab's connection to resolve
+          await waitForClock(clock, () => getEmits(emit, 'connectionManager.connectionCheckStarted')
+            .some(call => call.args[1].connectionId === DEFAULT_CONNECTIONS[0].id));
 
           // then
-          expect(triggerAction).to.have.been.calledWith(
-            'emit-event',
+          expect(emit).to.have.been.calledWith(
+            'connectionManager.connectionCheckStarted',
             sinon.match({
-              type: 'connectionManager.connectionCheckStarted',
-              payload: sinon.match({
-                connectionId: DEFAULT_CONNECTIONS[0].id,
-                connection: DEFAULT_CONNECTIONS[0],
-              })
+              connectionId: DEFAULT_CONNECTIONS[0].id,
+              connection: DEFAULT_CONNECTIONS[0],
             })
           );
         });
@@ -554,36 +543,34 @@ describe('ConnectionManagerPlugin', function() {
               'connectionManagerPlugin.c8connections': DEFAULT_CONNECTIONS
             });
 
-            const triggerAction = sinon.spy();
+            const emit = sinon.spy();
 
             createConnectionManagerPlugin({
               getConnectionForTab: () => Promise.resolve(DEFAULT_CONNECTIONS[0]),
               subscribe,
               settings,
-              triggerAction,
+              emit,
               connectionCheckResult: { success }
             });
 
-            // make React state settle and let initial checks run
-            await waitForNextCycle(3);
-            await clock.tickAsync(2000);
+            // let the connection resolve and the initial check run
+            await waitForStatusChanges(clock, emit, 1);
 
             // isolate: reset history so assertions only cover the next check cycle
-            triggerAction.resetHistory();
+            emit.resetHistory();
 
             // advance to trigger a periodic check (ConnectionChecker LONG interval = 5000ms)
             await clock.tickAsync(5000);
 
-            // then - connectionStatusChanged was emitted (a result arrived from interval check)
-            expect(triggerAction).to.have.been.calledWith(
-              'emit-event',
-              sinon.match({ type: 'connectionManager.connectionStatusChanged' })
+            // then - connectionStatusChanged was NOT re-emitted (result did not change)
+            const statusChangedCalls = emit.getCalls().filter(
+              call => call.args[0] === 'connectionManager.connectionStatusChanged'
             );
+            expect(statusChangedCalls).to.have.lengthOf(0);
 
-            // but connectionCheckStarted was NOT emitted (no state change occurred)
-            const checkStartedCalls = triggerAction.getCalls().filter(
-              call => call.args[0] === 'emit-event' &&
-                call.args[1]?.type === 'connectionManager.connectionCheckStarted'
+            // and connectionCheckStarted was NOT emitted (no state change occurred)
+            const checkStartedCalls = emit.getCalls().filter(
+              call => call.args[0] === 'connectionManager.connectionCheckStarted'
             );
             expect(checkStartedCalls).to.have.lengthOf(0);
           });
@@ -611,19 +598,18 @@ describe('ConnectionManagerPlugin', function() {
             'connectionManagerPlugin.c8connections': DEFAULT_CONNECTIONS
           });
 
-          const triggerAction = sinon.spy();
+          const emit = sinon.spy();
 
           createConnectionManagerPlugin({
             getConnectionForTab: () => Promise.resolve(DEFAULT_CONNECTIONS[0]),
             subscribe,
             settings,
-            triggerAction,
+            emit,
             connectionCheckResult: { success: true }
           });
 
-          // make React state settle and let initial checks run
-          await waitForNextCycle(3);
-          await clock.tickAsync(2000);
+          // let the connection resolve and the initial check run
+          await waitForStatusChanges(clock, emit, 1);
 
           // cancel the in-progress check by opening settings (triggers stopChecking)
           openSettings();
@@ -633,20 +619,153 @@ describe('ConnectionManagerPlugin', function() {
           await clock.tickAsync(1000);
 
           // isolate: reset history so assertions only cover the post-cancel window
-          triggerAction.resetHistory();
+          emit.resetHistory();
 
           // advance clock past where the cancelled check interval would have fired
           await clock.tickAsync(5000);
 
           // then - no connectionCheckStarted from the cancelled check
-          const checkStartedCalls = triggerAction.getCalls().filter(
-            call => call.args[0] === 'emit-event' &&
-                    call.args[1]?.type === 'connectionManager.connectionCheckStarted'
+          const checkStartedCalls = emit.getCalls().filter(
+            call => call.args[0] === 'connectionManager.connectionCheckStarted'
           );
           expect(checkStartedCalls).to.have.lengthOf(0);
         });
 
       });
+
+
+      describe('connectionManager.connectionStatusChanged de-duplication', function() {
+
+        function createGetGlobal(checkConnection, settings, getConnectionForTab = () => Promise.resolve(DEFAULT_CONNECTIONS[0])) {
+          return (name) => {
+            if (name === 'deployment') {
+              return new Deployment({
+                getConnectionForTab,
+                async setConnectionForFile() {},
+                getEndpoints() {
+                  return settings.get('connectionManagerPlugin.c8connections') || [];
+                }
+              });
+            } else if (name === 'zeebeAPI') {
+              return new ZeebeAPI({ checkConnection });
+            }
+          };
+        }
+
+        function createSubscribe() {
+          return (event, callback) => {
+            if (event === 'app.activeTabChanged') {
+              waitForNextCycle().then(() => callback({
+                activeTab: DEFAULT_ACTIVE_TAB
+              }));
+            }
+            return { cancel: () => {} };
+          };
+        }
+
+
+        it('should emit only once for repeated identical results', async function() {
+
+          // given
+          const settings = createMockSettings({
+            'connectionManagerPlugin.c8connections': DEFAULT_CONNECTIONS
+          });
+
+          const checkConnection = () => ({ success: true, response: { gatewayVersion: '8.8.0' } });
+
+          const emit = sinon.spy();
+
+          createConnectionManagerPlugin({
+            subscribe: createSubscribe(),
+            settings,
+            emit,
+            _getGlobal: createGetGlobal(checkConnection, settings)
+          });
+
+          // when - initial check + several periodic checks all return the same result
+          await waitForStatusChanges(clock, emit, 1);
+          await clock.tickAsync(5000);
+          await clock.tickAsync(5000);
+
+          // then - status change is emitted exactly once
+          const statusChangedCalls = getStatusChanges(emit);
+
+          expect(statusChangedCalls).to.have.lengthOf(1);
+          expect(statusChangedCalls[0].args[1]).to.include({ success: true });
+        });
+
+
+        it('should emit again when the result changes', async function() {
+
+          // given
+          const settings = createMockSettings({
+            'connectionManagerPlugin.c8connections': DEFAULT_CONNECTIONS
+          });
+
+          let currentResult = { success: true, response: { gatewayVersion: '8.8.0' } };
+          const checkConnection = () => currentResult;
+
+          const emit = sinon.spy();
+
+          createConnectionManagerPlugin({
+            subscribe: createSubscribe(),
+            settings,
+            emit,
+            _getGlobal: createGetGlobal(checkConnection, settings)
+          });
+
+          // when - first check succeeds
+          await waitForStatusChanges(clock, emit, 1);
+
+          // ...then the connection starts failing
+          currentResult = { success: false, reason: 'CONTACT_POINT_UNAVAILABLE' };
+          await waitForStatusChanges(clock, emit, 2);
+
+          // then - status change emitted for both the success and the error
+          const statusChangedCalls = getStatusChanges(emit);
+
+          expect(statusChangedCalls).to.have.lengthOf(2);
+          expect(statusChangedCalls[0].args[1]).to.include({ success: true });
+          expect(statusChangedCalls[1].args[1])
+            .to.include({ success: false, reason: 'CONTACT_POINT_UNAVAILABLE' });
+        });
+
+
+        it('should not report a connection error while the connection is still being resolved', async function() {
+
+          // given
+          const settings = createMockSettings({
+            'connectionManagerPlugin.c8connections': DEFAULT_CONNECTIONS
+          });
+
+          const checkConnection = () => ({ success: true, response: { gatewayVersion: '8.8.0' } });
+
+          // resolving the active tab's connection takes longer than `DELAYS.SHORT`
+          const getConnectionForTab = () => new Promise(
+            resolve => setTimeout(() => resolve(DEFAULT_CONNECTIONS[0]), 2000)
+          );
+
+          const emit = sinon.spy();
+
+          createConnectionManagerPlugin({
+            subscribe: createSubscribe(),
+            settings,
+            emit,
+            _getGlobal: createGetGlobal(checkConnection, settings, getConnectionForTab)
+          });
+
+          // when
+          await waitForStatusChanges(clock, emit, 1);
+
+          // then - only the actual check result is reported, no `NO_CONFIG` error
+          const statusChangedCalls = getStatusChanges(emit);
+
+          expect(statusChangedCalls).to.have.lengthOf(1);
+          expect(statusChangedCalls[0].args[1]).to.include({ success: true });
+        });
+
+      });
+
     });
   });
 
@@ -1298,6 +1417,7 @@ function createPluginProps(props = {}, globals = {}) {
     log = () => {},
     subscribe = () => ({ cancel: () => {} }),
     triggerAction = () => {},
+    emit = () => {},
     settings = createMockSettings(),
     config = createMockConfig(),
     getConfig = () => config,
@@ -1313,6 +1433,7 @@ function createPluginProps(props = {}, globals = {}) {
     log,
     subscribe,
     triggerAction,
+    emit,
     settings,
     config,
     getConfig,
@@ -1320,6 +1441,37 @@ function createPluginProps(props = {}, globals = {}) {
     connectionCheckResult,
     setConnectionCheckResult
   };
+}
+
+function getEmits(emit, event) {
+  return emit.getCalls().filter(call => call.args[0] === event);
+}
+
+function getStatusChanges(emit) {
+  return getEmits(emit, 'connectionManager.connectionStatusChanged');
+}
+
+/**
+ * Advance the fake clock until `condition` holds.
+ *
+ * Waiting for the actual condition instead of a fixed number of event loop
+ * turns keeps these assertions independent of how React schedules the
+ * intermediate re-renders, which differs between platforms.
+ */
+async function waitForClock(clock, condition, timeout = 30000) {
+  for (let elapsed = 0; elapsed <= timeout; elapsed += 100) {
+    if (condition()) {
+      return;
+    }
+
+    await clock.tickAsync(100);
+  }
+
+  throw new Error('timeout waiting for condition');
+}
+
+async function waitForStatusChanges(clock, emit, count) {
+  return waitForClock(clock, () => getStatusChanges(emit).length >= count);
 }
 
 async function waitForNextCycle(n = 1) {

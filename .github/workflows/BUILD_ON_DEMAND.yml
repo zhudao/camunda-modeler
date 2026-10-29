@@ -19,14 +19,17 @@ jobs:
       matrix:
         os: [ ubuntu-latest, macos-latest, windows-2022 ]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write # Vault OIDC/JWT auth
     env:
       ON_DEMAND: true
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
     - name: Use Node.js
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@v7
       with:
         node-version: 24
         cache: 'npm'
@@ -42,9 +45,10 @@ jobs:
       uses: hashicorp/vault-action@v4.0.0
       with:
         url: ${{ secrets.VAULT_ADDR }}
-        method: approle
-        roleId: ${{ secrets.VAULT_ROLE_ID }}
-        secretId: ${{ secrets.VAULT_SECRET_ID }}
+        method: jwt
+        role: ${{ secrets.VAULT_JWT_ROLE }}
+        path: ${{ secrets.VAULT_JWT_PATH }}
+        jwtGithubAudience: ${{ secrets.VAULT_JWT_AUDIENCE }}
         exportEnv: false
         secrets: |
           secret/data/products/desktop-modeler/ci/sentry SENTRY_AUTH_TOKEN;
@@ -58,9 +62,10 @@ jobs:
       uses: hashicorp/vault-action@v4.0.0
       with:
         url: ${{ secrets.VAULT_ADDR }}
-        method: approle
-        roleId: ${{ secrets.VAULT_ROLE_ID }}
-        secretId: ${{ secrets.VAULT_SECRET_ID }}
+        method: jwt
+        role: ${{ secrets.VAULT_JWT_ROLE }}
+        path: ${{ secrets.VAULT_JWT_PATH }}
+        jwtGithubAudience: ${{ secrets.VAULT_JWT_AUDIENCE }}
         exportEnv: false
         secrets: |
           secret/data/products/rpa/ci/azure             CERT_PROFILE_NAME  | AZURE_CERT_PROFILE_NAME ;
@@ -95,8 +100,8 @@ jobs:
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ON_DEMAND_SECRET_ACCESS_KEY }}"
         AWS_REGION: "${{ secrets.AWS_ON_DEMAND_REGION }}"
         AWS_BUCKET: "${{ secrets.AWS_ON_DEMAND_BUCKET }}"
-        APPLE_DEVELOPER_ID: "${{ secrets.APPLE_DEVELOPER_ID }}"
-        APPLE_DEVELOPER_ID_PASSWORD: "${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}"
+        APPLE_ID: "${{ secrets.APPLE_DEVELOPER_ID }}"
+        APPLE_APP_SPECIFIC_PASSWORD: "${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}"
         APPLE_TEAM_ID: "${{ secrets.APPLE_TEAM_ID }}"
         CSC_LINK: "${{ secrets.CSC_LINK }}"
         CSC_KEY_PASSWORD: "${{ secrets.CSC_KEY_PASSWORD }}"

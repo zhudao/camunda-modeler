@@ -18,7 +18,7 @@ jobs:
       tag: ${{ steps.tag.outputs.TAG }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
     - name: Get tag
       id: tag
       run: |
@@ -41,12 +41,13 @@ jobs:
     # Required to upload release artifacts to GitHub
     permissions:
       contents: write
+      id-token: write # Vault OIDC/JWT auth
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
     - name: Use Node.js
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@v7
       with:
         node-version: 24
         cache: 'npm'
@@ -57,9 +58,10 @@ jobs:
       uses: hashicorp/vault-action@v4.0.0
       with:
         url: ${{ secrets.VAULT_ADDR }}
-        method: approle
-        roleId: ${{ secrets.VAULT_ROLE_ID }}
-        secretId: ${{ secrets.VAULT_SECRET_ID }}
+        method: jwt
+        role: ${{ secrets.VAULT_JWT_ROLE }}
+        path: ${{ secrets.VAULT_JWT_PATH }}
+        jwtGithubAudience: ${{ secrets.VAULT_JWT_AUDIENCE }}
         exportEnv: false
         secrets: |
           secret/data/products/desktop-modeler/ci/sentry SENTRY_AUTH_TOKEN;
@@ -73,9 +75,10 @@ jobs:
       uses: hashicorp/vault-action@v4.0.0
       with:
         url: ${{ secrets.VAULT_ADDR }}
-        method: approle
-        roleId: ${{ secrets.VAULT_ROLE_ID }}
-        secretId: ${{ secrets.VAULT_SECRET_ID }}
+        method: jwt
+        role: ${{ secrets.VAULT_JWT_ROLE }}
+        path: ${{ secrets.VAULT_JWT_PATH }}
+        jwtGithubAudience: ${{ secrets.VAULT_JWT_AUDIENCE }}
         exportEnv: false
         secrets: |
           secret/data/products/rpa/ci/azure             CERT_PROFILE_NAME  | AZURE_CERT_PROFILE_NAME ;
@@ -91,8 +94,6 @@ jobs:
       env:
         CSC_LINK: "${{ secrets.CSC_LINK }}"
         CSC_KEY_PASSWORD: "${{ secrets.CSC_KEY_PASSWORD }}"
-        MIXPANEL_TOKEN: "${{ secrets.MIXPANEL_PROJECT_TOKEN }}"
-        MIXPANEL_STAGE: "prod"
         SENTRY_AUTH_TOKEN: "${{ steps.secrets.outputs.SENTRY_AUTH_TOKEN }}"
         SENTRY_DSN: "${{ steps.secrets.outputs.SENTRY_DSN }}"
         SENTRY_ORG: "${{ steps.secrets.outputs.SENTRY_ORG }}"
@@ -104,13 +105,11 @@ jobs:
     - name: Build release (MacOS)
       if: ${{ runner.os == 'macOS' }}
       env:
-        APPLE_DEVELOPER_ID: "${{ secrets.APPLE_DEVELOPER_ID }}"
-        APPLE_DEVELOPER_ID_PASSWORD: "${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}"
+        APPLE_ID: "${{ secrets.APPLE_DEVELOPER_ID }}"
+        APPLE_APP_SPECIFIC_PASSWORD: "${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}"
         APPLE_TEAM_ID: "${{ secrets.APPLE_TEAM_ID }}"
         CSC_LINK: "${{ secrets.CSC_LINK }}"
         CSC_KEY_PASSWORD: "${{ secrets.CSC_KEY_PASSWORD }}"
-        MIXPANEL_TOKEN: "${{ secrets.MIXPANEL_PROJECT_TOKEN }}"
-        MIXPANEL_STAGE: "prod"
         SENTRY_AUTH_TOKEN: "${{ steps.secrets.outputs.SENTRY_AUTH_TOKEN }}"
         SENTRY_DSN: "${{ steps.secrets.outputs.SENTRY_DSN }}"
         SENTRY_ORG: "${{ steps.secrets.outputs.SENTRY_ORG }}"
@@ -129,8 +128,6 @@ jobs:
         AZURE_ENDPOINT: "${{ steps.windowsSecrets.outputs.AZURE_ENDPOINT }}"
         AZURE_PUBLISHER_NAME: "${{ steps.windowsSecrets.outputs.AZURE_PUBLISHER_NAME }}"
         AZURE_TENANT_ID: "${{ steps.windowsSecrets.outputs.AZURE_TENANT_ID }}"
-        MIXPANEL_TOKEN: "${{ secrets.MIXPANEL_PROJECT_TOKEN }}"
-        MIXPANEL_STAGE: "prod"
         SENTRY_AUTH_TOKEN: "${{ steps.secrets.outputs.SENTRY_AUTH_TOKEN }}"
         SENTRY_DSN: "${{ steps.secrets.outputs.SENTRY_DSN }}"
         SENTRY_ORG: "${{ steps.secrets.outputs.SENTRY_ORG }}"
@@ -146,7 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         # required to compare versions in the
         # license book summary
@@ -168,6 +165,9 @@ jobs:
     - pre_release
     - build_release
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Vault OIDC/JWT auth
+      issues: read
 
     # skip for release candidates
     if: contains(needs.pre_release.outputs.tag, 'rc') == false
@@ -177,9 +177,10 @@ jobs:
       uses: hashicorp/vault-action@v4.0.0
       with:
         url: ${{ secrets.VAULT_ADDR }}
-        method: approle
-        roleId: ${{ secrets.VAULT_ROLE_ID }}
-        secretId: ${{ secrets.VAULT_SECRET_ID }}
+        method: jwt
+        role: ${{ secrets.VAULT_JWT_ROLE }}
+        path: ${{ secrets.VAULT_JWT_PATH }}
+        jwtGithubAudience: ${{ secrets.VAULT_JWT_AUDIENCE }}
         exportEnv: false
         secrets: |
           secret/data/products/desktop-modeler/ci/slack_integration SUPPORT_SLACK_CHANNEL_ID;
@@ -202,7 +203,7 @@ jobs:
         )
         echo "LINK=https://github.com/camunda/camunda-modeler/issues?q=is%3Aissue+label%3Achannel%3Asupport+milestone%3A$MILESTONE" >> $GITHUB_OUTPUT
     - name: Post to a Slack channel
-      uses: slackapi/slack-github-action@v3
+      uses: slackapi/slack-github-action@v4
       with:
         method: chat.postMessage
         token: ${{ steps.secrets.outputs.SLACK_BOT_TOKEN }}
@@ -231,17 +232,21 @@ jobs:
       - pre_release
       - build_release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Vault OIDC/JWT auth
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Import Secrets
         id: secrets
         uses: hashicorp/vault-action@v4.0.0
         with:
           url: ${{ secrets.VAULT_ADDR }}
-          method: approle
-          roleId: ${{ secrets.VAULT_ROLE_ID }}
-          secretId: ${{ secrets.VAULT_SECRET_ID }}
+          method: jwt
+          role: ${{ secrets.VAULT_JWT_ROLE }}
+          path: ${{ secrets.VAULT_JWT_PATH }}
+          jwtGithubAudience: ${{ secrets.VAULT_JWT_AUDIENCE }}
           exportEnv: false
           secrets: |
             secret/data/products/desktop-modeler/ci/fossa FOSSA_API_KEY;

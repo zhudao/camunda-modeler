@@ -115,7 +115,10 @@ const noopProvider = {
 export class TabsProvider {
 
   constructor(resolveTab) {
-    this.uuid = 0;
+
+    // start at 1 so generated tab ids are always truthy, matching production
+    // (real ids are non-empty strings; id 0 would be falsy)
+    this.uuid = 1;
 
     this.resolveTab = resolveTab || function(type) {
 
@@ -366,6 +369,20 @@ export class Dialog extends Mock {
     this.showEmptyFileDialogResponse = new Response();
     this.showFileExplorerDialogResponse = new Response();
     this.showReloadModelerDialogResponse = new Response();
+
+    this._openDialogs = 0;
+  }
+
+  isDialogOpen() {
+    return this._openDialogs > 0;
+  }
+
+  _track(result) {
+    this._openDialogs++;
+
+    return Promise.resolve(result).finally(() => {
+      this._openDialogs--;
+    });
   }
 
   setShowOpenFilesDialogResponse(index, response) {
@@ -401,39 +418,39 @@ export class Dialog extends Mock {
   }
 
   showOpenFilesDialog() {
-    return this.showOpenFilesDialogResponse.next();
+    return this._track(this.showOpenFilesDialogResponse.next());
   }
 
   showOpenFileErrorDialog() {
-    return this.showOpenFileErrorDialogResponse.next();
+    return this._track(this.showOpenFileErrorDialogResponse.next());
   }
 
   showSaveFileDialog() {
-    return this.showSaveFileDialogResponse.next();
+    return this._track(this.showSaveFileDialogResponse.next());
   }
 
   showSaveFileErrorDialog() {
-    return this.showSaveFileErrorDialogResponse.next();
+    return this._track(this.showSaveFileErrorDialogResponse.next());
   }
 
   show() {
-    return this.showResponse.next();
+    return this._track(this.showResponse.next());
   }
 
   showCloseFileDialog() {
-    return this.showCloseFileDialogResponse.next();
+    return this._track(this.showCloseFileDialogResponse.next());
   }
 
   showEmptyFileDialog() {
-    return this.showEmptyFileDialogResponse.next();
+    return this._track(this.showEmptyFileDialogResponse.next());
   }
 
   showFileExplorerDialog() {
-    return this.showFileExplorerDialogResponse.next();
+    return this._track(this.showFileExplorerDialogResponse.next());
   }
 
   showReloadDialog() {
-    return this.showReloadModelerDialogResponse.next();
+    return this._track(this.showReloadModelerDialogResponse.next());
   }
 
 }
@@ -637,6 +654,10 @@ export class Plugins extends Mock {
   }
 
   getAppPlugins() {
+    return [];
+  }
+
+  getErrors() {
     return [];
   }
 }

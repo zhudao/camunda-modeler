@@ -189,14 +189,11 @@ export default class UpdateChecks extends PureComponent {
 
   openPrivacyPreferences = () => {
     const {
-      triggerAction
+      emit
     } = this.props;
 
-    triggerAction('emit-event', {
-      type: 'show-privacy-preferences',
-      payload: {
-        autoFocusKey: 'ENABLE_UPDATE_CHECKS'
-      }
+    emit('show-privacy-preferences', {
+      autoFocusKey: 'ENABLE_UPDATE_CHECKS'
     });
   };
 
@@ -390,7 +387,7 @@ export default class UpdateChecks extends PureComponent {
         {
           updateAvailable && <Fill slot="status-bar__app" group="Z_update_checks">
             <button
-              className="btn btn--primary"
+              className="btn btn--attention"
               title="Toggle update info"
               onClick={ this.toggleUpdateAvailableOverlay }
               ref={ this.updateAvailableButtonRef }>Update</button>

@@ -24,6 +24,8 @@ import {
   mapStackTrace
 } from 'sourcemapped-stacktrace';
 
+import { C4Provider } from '@camunda/design-system';
+
 import App from './App';
 
 import Flags, { DISABLE_PLUGINS, RELAUNCH } from '../util/Flags';
@@ -75,6 +77,34 @@ export default class AppParent extends PureComponent {
     };
 
     return exec().catch(this.handleError);
+  };
+
+  /**
+   * Handle an action received via the Electron menu channel.
+   *
+   * Menu items may emit application events (formerly routed through the
+   * removed `emit-event` action). These are forwarded to the events context;
+   * everything else is a regular action.
+   *
+   * @param {string} action
+   * @param {Object} [options]
+   */
+  handleMenuAction = (action, options) => {
+    if (action === 'emit-event') {
+      const {
+        type,
+        payload
+      } = options || {};
+
+      // fail-safe emit, mirroring #triggerAction
+      try {
+        return this.getApp().emitEvent(type, payload);
+      } catch (error) {
+        return this.handleError(error);
+      }
+    }
+
+    return this.triggerAction(action, options);
   };
 
   handleOpenFiles = (event, newFiles) => {
@@ -278,6 +308,10 @@ export default class AppParent extends PureComponent {
 
     await this.getApp().openFiles(files, activeFile);
 
+    // plug-ins load before the app mounts; log their errors only now, as an
+    // earlier entry is hidden when the restored workspace layout closes the log
+    this.getPlugins().getErrors().forEach(message => this.logToClient(getClientEntry('error', message)));
+
     if (typeof onStarted === 'function') {
       onStarted();
     }
@@ -347,7 +381,7 @@ export default class AppParent extends PureComponent {
 
     this.subscriptions = [
       backend.once('client:started', this.handleStarted),
-      backend.on('menu:action', (_, action, options) => this.triggerAction(action, options)),
+      backend.on('menu:action', (_, action, options) => this.handleMenuAction(action, options)),
       backend.on('client:open-files', this.handleOpenFiles),
       backend.on('client:window-focused', this.handleFocused),
       backend.on('client:window-blurred', this.handleBlurred),
@@ -386,17 +420,19 @@ export default class AppParent extends PureComponent {
     } = this.props;
 
     return (
-      <App
-        ref={ this.appRef }
-        tabsProvider={ tabsProvider }
-        globals={ globals }
-        onMenuUpdate={ this.handleMenuUpdate }
-        onContextMenu={ this.handleContextMenu }
-        onWorkspaceChanged={ this.handleWorkspaceChanged }
-        onReady={ this.handleReady }
-        onError={ this.handleError }
-        onWarning={ this.handleWarning }
-      />
+      <C4Provider>
+        <App
+          ref={ this.appRef }
+          tabsProvider={ tabsProvider }
+          globals={ globals }
+          onMenuUpdate={ this.handleMenuUpdate }
+          onContextMenu={ this.handleContextMenu }
+          onWorkspaceChanged={ this.handleWorkspaceChanged }
+          onReady={ this.handleReady }
+          onError={ this.handleError }
+          onWarning={ this.handleWarning }
+        />
+      </C4Provider>
     );
   }
 

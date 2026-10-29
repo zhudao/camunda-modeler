@@ -31,6 +31,10 @@ const {
  * @typedef {import('@camunda8/sdk/dist/c8').Camunda8} Camunda8
  * @typedef {typeof import('@camunda8/sdk').Camunda8} Camunda8Constructor
  * @typedef {import('@camunda8/sdk/dist/zeebe').ZeebeGrpcClient} ZeebeGrpcClient
+ * @typedef {import('@camunda8/sdk').CamundaRestClient} CamundaRestClient
+ * @typedef {import('@camunda8/sdk/dist/lib').Camunda8ClientConfiguration} Camunda8ClientConfiguration
+ * @typedef {import('./endpoints').Endpoint} Endpoint
+ * @typedef {'grpc'|'grpcs'|'http'|'https'} Protocol
  */
 
 /**
@@ -61,36 +65,52 @@ class CamundaClientFactory {
     /** @type {Camunda8} */
     this._cachedClient = null;
 
-    /** @type {import("./endpoints").Endpoint} */
+    /** @type {Endpoint} */
     this._cachedEndpoint = null;
 
-    /** @type {'http'|'https'|'grpc'|'grpcs'} */
+    /** @type {Protocol} */
     this._cachedProtocol = 'grpc';
+
+    /**
+     * Whether the cached protocol is a fallback guess that no probe could
+     * verify, cf. {@link CamundaClientFactory#_getProtocol}.
+     *
+     * @type {boolean}
+     */
+    this._cachedProtocolIsFallback = false;
   }
 
   /**
-   * @param {import("./endpoints").Endpoint} endpoint
+   * @param {Endpoint} endpoint
+   *
+   * @returns {Promise<Camunda8>}
    */
   async getCamundaClient(endpoint) {
-    const protocol = await this._getProtocol(endpoint);
 
-    if (this._isCacheValid(endpoint, protocol)) {
+    // check the cache before protocol detection, as detection creates
+    // throwaway clients and must not run on every interaction; unverified
+    // fallback protocols are re-probed as they may stem from an unreachable
+    // cluster
+    if (this._isCacheValid(endpoint) && !this._cachedProtocolIsFallback) {
       return this._cachedClient;
     }
+
+    const { protocol, fallback } = await this._getProtocol(endpoint);
 
     this._cachedClient?.closeAllClients();
 
     this._cachedProtocol = protocol;
-    this._cachedClient = await this._createCamundaClient(endpoint);
+    this._cachedProtocolIsFallback = fallback;
+    this._cachedClient = await this._createCamundaClient(endpoint, protocol);
     this._cachedEndpoint = endpoint;
 
     return this._cachedClient;
   }
 
   /**
-   * @param {import("./endpoints").Endpoint} endpoint
+   * @param {Endpoint} endpoint
    *
-   * @returns {Promise<{ zeebeGrpcClient?: ZeebeGrpcClient, camundaRestClient?: import('@camunda8/sdk').CamundaRestClient}>}
+   * @returns {Promise<{ zeebeGrpcClient?: ZeebeGrpcClient, camundaRestClient?: CamundaRestClient}>}
    */
   async getSupportedCamundaClients(endpoint) {
     const camundaClient = await this.getCamundaClient(endpoint);
@@ -109,62 +129,69 @@ class CamundaClientFactory {
   }
 
   /**
-   * Get the appropriate protocol (gRPC or REST) for the endpoint.
+   * Get the appropriate protocol (gRPC or REST) for the endpoint. A
+   * `fallback` protocol was not verified by a probe; the endpoint may simply
+   * be unreachable, so it must be re-probed on subsequent requests.
    *
-   * @param {import("./endpoints").Endpoint} endpoint
+   * @param {Endpoint} endpoint
    *
-   * @returns {Promise<'grpc'|'grpcs'|'http'|'https'>}
+   * @returns {Promise<{ protocol: Protocol, fallback: boolean }>}
    */
   async _getProtocol(endpoint) {
     const matchedProtocol = endpoint.url.match(/^(https?|grpcs?):\/\//)?.[1];
 
     if (!matchedProtocol) {
-      return 'grpc';
+      return { protocol: 'grpc', fallback: false };
     }
 
     // Use explicit gRPC protocol from URL
-    if (matchedProtocol && [ 'grpc', 'grpcs' ].includes(matchedProtocol)) {
-      return matchedProtocol;
+    if ([ 'grpc', 'grpcs' ].includes(matchedProtocol)) {
+      return { protocol: matchedProtocol, fallback: false };
     }
 
     // For SaaS, get protocol from URL
     if (endpoint.type === ENDPOINT_TYPES.CAMUNDA_CLOUD) {
       if (isGrpcSaasUrl(endpoint.url)) {
-        return 'grpcs';
+        return { protocol: 'grpcs', fallback: false };
       } else if (isRestSaasUrl(endpoint.url)) {
-        return 'https';
+        return { protocol: 'https', fallback: false };
       }
     }
 
-    // Test REST first, fallback to gRPC
+    // Test REST first, then gRPC
     const isSecure = matchedProtocol === 'https';
 
     const grpcProtocol = isSecure ? 'grpcs' : 'grpc';
 
     if (await this._canConnectWithProtocol(endpoint, matchedProtocol)) {
-      return matchedProtocol;
+      return { protocol: matchedProtocol, fallback: false };
     }
 
-    return grpcProtocol;
+    if (await this._canConnectWithProtocol(endpoint, grpcProtocol)) {
+      return { protocol: grpcProtocol, fallback: false };
+    }
+
+    // Neither protocol could be reached, the endpoint is likely down. Assume
+    // REST (the common case for http(s) endpoints) and flag it as fallback,
+    // so it is re-probed instead of trusted from the cache.
+    return { protocol: matchedProtocol, fallback: true };
   }
 
   /**
    * Check if the endpoint can be connected with the specified protocol.
    *
-   * @param {import("./endpoints").Endpoint} endpoint
-   * @param {'grpc'|'grpcs'|'http'|'https'} protocol
+   * @param {Endpoint} endpoint
+   * @param {Protocol} protocol
    *
    * @returns {Promise<boolean>}
    */
   async _canConnectWithProtocol(endpoint, protocol) {
+    let testClient;
+
     try {
 
-      // Temporarily set the protocol for testing
-      const originalProtocol = this._cachedProtocol;
-      this._cachedProtocol = protocol;
-
       // Create a test client with the specific protocol
-      const testClient = await this._createCamundaClient(endpoint);
+      testClient = await this._createCamundaClient(endpoint, protocol);
 
       if ([ 'grpc', 'grpcs' ].includes(protocol)) {
         const zeebeClient = testClient.getZeebeGrpcApiClient();
@@ -174,34 +201,31 @@ class CamundaClientFactory {
         await restClient.getTopology();
       }
 
-      testClient.closeAllClients();
-
-      // Restore original protocol
-      this._cachedProtocol = originalProtocol;
-
       return true;
     } catch (error) {
       return false;
+    } finally {
+      testClient?.closeAllClients();
     }
   }
 
   /**
-   * Checks if the current cache is valid for the given endpoint and protocol
-   * @param {import("./endpoints").Endpoint} endpoint
-   * @param {'grpc'|'grpcs'|'http'|'https'} protocol
+   * Check if the current cache is valid for the given endpoint.
+   *
+   * @param {Endpoint} endpoint
+   *
    * @returns {boolean}
    */
-  _isCacheValid(endpoint, protocol) {
-    return this._cachedClient &&
-           this._cachedProtocol === protocol &&
+  _isCacheValid(endpoint) {
+    return Boolean(this._cachedClient) &&
            this._isEndpointEqual(endpoint, this._cachedEndpoint);
   }
 
   /**
    * Check if two endpoints are equal.
    *
-   * @param {import("./endpoints").Endpoint} endpoint1
-   * @param {import("./endpoints").Endpoint} endpoint2
+   * @param {Endpoint} endpoint1
+   * @param {Endpoint} endpoint2
    *
    * @returns {boolean}
    */
@@ -221,9 +245,12 @@ class CamundaClientFactory {
   }
 
   /**
-   * @param {import("./endpoints").Endpoint} endpoint
+   * @param {Endpoint} endpoint
+   * @param {Protocol} protocol
+   *
+   * @returns {Promise<Camunda8|undefined>}
    */
-  async _createCamundaClient(endpoint) {
+  async _createCamundaClient(endpoint, protocol) {
     const {
       type,
       authType = AUTH_TYPES.NONE,
@@ -237,7 +264,7 @@ class CamundaClientFactory {
       return;
     }
 
-    const clientConfig = await this._getClientConfig(endpoint);
+    const clientConfig = await this._getClientConfig(endpoint, protocol);
 
     this._log.debug('creating client', {
       url,
@@ -247,7 +274,13 @@ class CamundaClientFactory {
     return new this._Camunda8(clientConfig);
   }
 
-  async _getClientConfig(endpoint) {
+  /**
+   * @param {Endpoint} endpoint
+   * @param {Protocol} protocol
+   *
+   * @returns {Promise<Camunda8ClientConfiguration>}
+   */
+  async _getClientConfig(endpoint, protocol) {
 
     const {
       type,
@@ -255,17 +288,17 @@ class CamundaClientFactory {
       url
     } = endpoint;
 
-    /** @type {import('@camunda8/sdk/dist/lib').Camunda8ClientConfiguration} */
+    /** @type {Camunda8ClientConfiguration} */
     let clientConfig = {};
 
     if (endpoint.tenantId) {
       clientConfig.CAMUNDA_TENANT_ID = endpoint.tenantId;
     }
 
-    switch (this._cachedProtocol) {
+    switch (protocol) {
     case 'grpc':
     case 'grpcs':
-      clientConfig.ZEEBE_GRPC_ADDRESS = url ? overwriteProtocol(url, this._cachedProtocol) : '';
+      clientConfig.ZEEBE_GRPC_ADDRESS = url ? overwriteProtocol(url, protocol) : '';
       clientConfig.zeebeGrpcSettings = {
         ZEEBE_GRPC_CLIENT_RETRY: false
       };
@@ -326,6 +359,12 @@ class CamundaClientFactory {
     return clientConfig;
   }
 
+  /**
+   * @param {string} url
+   * @param {Camunda8ClientConfiguration} options
+   *
+   * @returns {Promise<Camunda8ClientConfiguration>}
+   */
   async _withTLSConfig(url, options) {
     const rootCerts = [];
 
@@ -357,6 +396,12 @@ class CamundaClientFactory {
     };
   }
 
+  /**
+   * @param {string} url
+   * @param {Camunda8ClientConfiguration} options
+   *
+   * @returns {Camunda8ClientConfiguration}
+   */
   _withPortConfig(url, options) {
 
     // do not override camunda cloud port (handled by zeebe-node)
@@ -377,6 +422,11 @@ class CamundaClientFactory {
     };
   }
 
+  /**
+   * @param {string} certPath
+   *
+   * @returns {string|undefined}
+   */
   _readRootCertificate(certPath) {
     let cert;
 

@@ -10,6 +10,8 @@
 
 import React from 'react';
 
+import debug from 'debug';
+
 import { isFunction } from 'min-dash';
 
 import {
@@ -26,7 +28,9 @@ import {
   CachedComponent
 } from '../../cached';
 
-import { Settings } from '@carbon/icons-react';
+import { EventsContext } from '../../EventsContext';
+
+import { Settings } from '@camunda/design-system/icons';
 
 import SidePanel, { DEFAULT_LAYOUT as SIDE_PANEL_DEFAULT_LAYOUT } from '../../side-panel/SidePanel';
 import SidePanelTitleBar from '../../side-panel/SidePanelTitleBar';
@@ -36,7 +40,6 @@ import TaskTestingTabActionItem from './side-panel/tabs/task-testing/TaskTesting
 
 import TaskTestingTab from './side-panel/tabs/task-testing/TaskTestingTab';
 import TaskTestingIcon from '../../../../resources/icons/TaskTesting.svg';
-import SidePanelHeader from './side-panel/SidePanelHeader';
 
 import VariablesSidePanel, { DEFAULT_LAYOUT as VARIABLES_PANEL_DEFAULT_LAYOUT } from './variables-side-panel/VariablesSidePanel';
 import VariablesTabActionItem from './variables-side-panel/VariablesTabActionItem';
@@ -44,6 +47,10 @@ import VariablesTabActionItem from './variables-side-panel/VariablesTabActionIte
 import { SidePanelGroup, SidePanelConsumer } from '../../side-panel/SidePanelGroup';
 
 import BpmnModeler from './modeler';
+
+import FeelPlayground from './modeler/features/feel-playground/FeelPlayground';
+import { getFeelPlaygroundConfig } from './modeler/features/feel-playground/FeelPlaygroundConfig';
+import { createFeelPlaygroundPopup } from './modeler/features/feel-playground/FeelPlaygroundPopup';
 
 import { active as isInputActive, isTextInput } from '../../../util/dom/isInput';
 
@@ -72,11 +79,15 @@ import {
 
 import EngineProfileHelper from '../EngineProfileHelper';
 
+import LintingHelper from '../LintingHelper';
+
 import {
   ENGINES
 } from '../../../util/Engines';
 
 import { getCloudTemplates } from '../../../util/elementTemplates';
+
+import CredentialManager from './credential-manager/CredentialManager';
 
 const EXPORT_AS = [ 'png', 'jpeg', 'svg' ];
 
@@ -86,8 +97,12 @@ export const DEFAULT_ENGINE_PROFILE = {
 
 const LOW_PRIORITY = 500;
 
+const log = debug('BpmnEditor:cloud');
+
 
 export class BpmnEditor extends CachedComponent {
+
+  static contextType = EventsContext;
 
   constructor(props) {
     super(props);
@@ -96,6 +111,7 @@ export class BpmnEditor extends CachedComponent {
 
     this.ref = React.createRef();
     this.propertiesPanelRef = React.createRef();
+    this.propertiesPanelHeaderRef = React.createRef();
 
     this.handleEngineProfileChangeDebounced = debounce(this.handleEngineProfileChange);
 
@@ -124,21 +140,14 @@ export class BpmnEditor extends CachedComponent {
           'modeler:executionPlatform': executionPlatform,
           'modeler:executionPlatformVersion': executionPlatformVersion
         });
-
-        this.props.onAction('emit-event', {
-          type: 'tab.engineProfileChanged',
-          payload: {
-            executionPlatform,
-            executionPlatformVersion
-          }
-        });
       },
       getCached: () => this.getCached(),
       setCached: ({ engineProfile }) => {
         this.handleEngineProfileChangeDebounced({ engineProfile });
 
         this.setCached({ engineProfile });
-      }
+      },
+      onChanged: (engineProfile) => this.emitEngineProfileChanged(engineProfile)
     });
 
     this.gridBehavior = new GridBehavior({
@@ -147,13 +156,17 @@ export class BpmnEditor extends CachedComponent {
 
     this.handleResize = debounce(this.handleResize);
 
-    this.handleLintingDebounced = debounce(this.handleLinting.bind(this));
+    this.linting = new LintingHelper({
+      lint: () => this.handleLinting(),
+      getCached: () => this.getCached(),
+      setCached: (state) => this.setCached(state)
+    });
 
     this.handlePropertiesPanelLayoutChange = this.handlePropertiesPanelLayoutChange.bind(this);
     this.handleLayoutChange = this.handleLayoutChange.bind(this);
   }
 
-  async componentDidMount() {
+  componentDidMount() {
     this._isMounted = true;
 
     const {
@@ -178,19 +191,17 @@ export class BpmnEditor extends CachedComponent {
       propertiesPanel.setLayout(layout.propertiesPanel);
     }
 
-    propertiesPanel.attachTo(this.propertiesPanelRef.current);
-
-    try {
-      await this.loadTemplates();
-    } catch (error) {
-      this.handleError({ error });
-    }
+    propertiesPanel.attachTo(this.propertiesPanelRef.current, this.propertiesPanelHeaderRef.current);
 
     this.checkImport();
+
+    this.linting.resume();
   }
 
   componentWillUnmount() {
     this._isMounted = false;
+
+    this.linting.cancel();
 
     const modeler = this.getModeler();
 
@@ -218,18 +229,29 @@ export class BpmnEditor extends CachedComponent {
       }
     }
 
-    if (prevProps.file !== this.props.file) {
+    if (prevProps.file?.path !== this.props.file?.path) {
       this.loadTemplates();
+
+      this.getCached().feelPlayground.setFile(this.props.file);
     }
 
     const { layout = {} } = this.props;
 
     const { panel = {} } = layout;
 
-    if (panel.open && panel.tab === 'linting') {
-      this.getModeler().get('linting').activate();
-    } else if (!panel.open || panel.tab !== 'linting') {
-      this.getModeler().get('linting').deactivate();
+    // only toggle linting once the diagram is imported; activating or
+    // deactivating while (re-)importing would access the not yet imported
+    // root element and crash (cf. #6049)
+    const { lastXML } = this.getCached();
+
+    if (lastXML && !this.state.importing && !this.isImportNeeded(prevProps)) {
+      const linting = this.getModeler().get('linting');
+
+      if (panel.open && panel.tab === 'linting') {
+        linting.activate();
+      } else {
+        linting.deactivate();
+      }
     }
 
     if (isPropertiesPanelLayoutChanged(prevProps, this.props)) {
@@ -267,6 +289,8 @@ export class BpmnEditor extends CachedComponent {
 
     modeler[fn]('elementTemplates.errors', this.handleElementTemplateErrors);
 
+    modeler[fn]('elementTemplates.changed', this.handleElementTemplatesChanged);
+
     modeler[fn]('error', 1500, this.handleError);
 
     modeler[fn]('minimap.toggle', this.handleMinimapToggle);
@@ -274,9 +298,26 @@ export class BpmnEditor extends CachedComponent {
     modeler[fn]('propertiesPanel.layoutChanged', this.handlePropertiesPanelLayoutChange);
 
     if (fn === 'on') {
-      modeler[ fn ]('commandStack.changed', LOW_PRIORITY, this.handleLintingDebounced);
-    } else if (fn === 'off') {
-      modeler[ fn ]('commandStack.changed', this.handleLintingDebounced);
+      this._connectionStatusSubscription = this.context.subscribe(
+        'connectionManager.connectionStatusChanged',
+        this.handleConnectionStatusChanged
+      );
+
+      modeler[ fn ]('commandStack.changed', LOW_PRIORITY, this.linting.schedule);
+    } else {
+      this._connectionStatusSubscription?.cancel();
+      this._connectionStatusSubscription = null;
+
+      modeler[ fn ]('commandStack.changed', this.linting.schedule);
+    }
+
+    // reload templates on focus to pick up external edits to local template
+    // files made while the app was away. The editor owns this decision, not
+    // the app. Cheap: loadTemplates skips re-setting unchanged templates.
+    if (fn === 'on') {
+      this._appFocusedSubscription = this.context.subscribe('app.focused', this.handleAppFocused);
+    } else {
+      this._appFocusedSubscription?.cancel();
     }
   }
 
@@ -286,6 +327,18 @@ export class BpmnEditor extends CachedComponent {
     });
   }
 
+  emitEngineProfileChanged = (engineProfile) => {
+    const {
+      executionPlatform,
+      executionPlatformVersion
+    } = engineProfile;
+
+    this.props.emit('tab.engineProfileChanged', {
+      executionPlatform,
+      executionPlatformVersion
+    });
+  };
+
   handleEngineProfileChange = ({ engineProfile }) => {
     const { executionPlatformVersion: version } = engineProfile;
 
@@ -293,7 +346,8 @@ export class BpmnEditor extends CachedComponent {
       return;
     }
 
-    const elementTemplates = this.getModeler().get('elementTemplates');
+    const modeler = this.getModeler();
+    const elementTemplates = modeler.get('elementTemplates');
 
     const engines = {
       ...elementTemplates.getEngines(),
@@ -301,18 +355,56 @@ export class BpmnEditor extends CachedComponent {
     };
 
     elementTemplates.setEngines(engines);
+
+    modeler.get('propertiesPanel').setFeelLanguageContext({
+      engines: {
+        camunda: version
+      }
+    });
+  };
+
+  handleAppFocused = () => {
+    this.loadTemplates().catch(error => this.handleError({ error }));
+  };
+
+  handleConnectionStatusChanged = (connectionStatus) => {
+    this.getCached().feelPlayground.setConfig(
+      getFeelPlaygroundConfig(connectionStatus, this.props.zeebeApi)
+    );
   };
 
   async loadTemplates() {
-    const { getConfig } = this.props;
+    const {
+      getConfig,
+      tab
+    } = this.props;
 
     const modeler = this.getModeler();
 
     const templatesLoader = modeler.get('elementTemplatesLoader');
 
-    let templates = await getConfig('bpmn.elementTemplates');
+    const templates = getCloudTemplates(await getConfig('bpmn.elementTemplates'));
 
-    templatesLoader.setTemplates(getCloudTemplates(templates));
+    // skip (re-)setting identical templates: setting them re-validates every
+    // template and invalidates the linter. A (re-)load only warrants that work
+    // when the fetched templates actually changed (e.g. edited locally). The
+    // key lives in the (tab-scoped) cache so it survives editor remounts, i.e.
+    // switching away and back to the tab does not re-set unchanged templates.
+    const templatesKey = JSON.stringify(templates);
+
+    if (templatesKey === this.getCached().templatesKey) {
+      log('skip re-setting - element templates unchanged', { tabId: tab?.id, path: this.props.file?.path });
+
+      return;
+    }
+
+    this.setCached({ templatesKey });
+
+    log('setting element templates', { tabId: tab?.id, path: this.props.file?.path });
+
+    templatesLoader.setTemplates(templates);
+
+    log('element templates set', { tabId: tab?.id, path: this.props.file?.path });
   }
 
   undo = () => {
@@ -355,6 +447,20 @@ export class BpmnEditor extends CachedComponent {
     });
   };
 
+  /**
+   * React to the modeler's element templates changing - e.g. after
+   * (re-)loading them. Templates are a linting input, so we let the app
+   * invalidate the (cached) linter for this tab and then re-lint through our
+   * own debounced path - coalescing with any concurrent modeling changes.
+   */
+  handleElementTemplatesChanged = () => {
+    log('element templates changed', { path: this.props.file?.path });
+
+    this.props.onAction('element-templates-changed');
+
+    this.linting.schedule();
+  };
+
   handleAttach = (event) => {
     const modeler = this.getModeler();
 
@@ -373,7 +479,7 @@ export class BpmnEditor extends CachedComponent {
     onError(error);
   };
 
-  handleImport = (error, warnings) => {
+  handleImport = async (error, warnings) => {
     const {
       isNew,
       onImport,
@@ -400,6 +506,18 @@ export class BpmnEditor extends CachedComponent {
       }
     }
 
+    if (!error) {
+      try {
+
+        // load the element templates now that the diagram is imported, so they
+        // are validated once - against the imported diagram - rather than on
+        // mount (before the document, and its execution platform, are known)
+        await this.loadTemplates();
+      } catch (err) {
+        error = err;
+      }
+    }
+
     if (!error && isNew && !defaultTemplatesApplied) {
       try {
         modeler.invoke(applyDefaultTemplates);
@@ -419,30 +537,17 @@ export class BpmnEditor extends CachedComponent {
     } else {
       this.setCached({
         defaultTemplatesApplied,
-        engineProfile,
         lastXML: xml,
         stackIdx
       });
 
       if (engineProfile) {
-        const { executionPlatform, executionPlatformVersion } = engineProfile;
-
-        this.props.onAction('emit-event', {
-          type: 'tab.engineProfileChanged',
-          payload: {
-            executionPlatform,
-            executionPlatformVersion
-          }
-        });
+        this.engineProfile.setCached(engineProfile);
       }
     }
 
     if (!error) {
-      try {
-        this.handleLinting(engineProfile);
-      } catch (err) {
-        error = err;
-      }
+      this.linting.schedule();
     }
 
     this.setState({
@@ -888,11 +993,11 @@ export class BpmnEditor extends CachedComponent {
       config,
       deployment,
       file,
-      id,
       layout,
       linting,
       onAction,
       startInstance,
+      tabId,
       zeebeApi
     } = this.props;
 
@@ -908,7 +1013,6 @@ export class BpmnEditor extends CachedComponent {
       <div className={ css.BpmnEditor }>
 
         <Loader hidden={ imported && !importing } />
-
         <div className="editor">
           <div
             className="diagram"
@@ -950,7 +1054,7 @@ export class BpmnEditor extends CachedComponent {
                     />
                   </SidePanel.Header>
                   <SidePanel.Header>
-                    <SidePanelHeader injector={ injector } />
+                    <div className="properties-panel-header-container" ref={ this.propertiesPanelHeaderRef } />
                   </SidePanel.Header>
                   <SidePanel.Tab id="properties" label="Properties" icon={ Settings }>
                     <PropertiesTab propertiesPanelRef={ this.propertiesPanelRef } />
@@ -960,7 +1064,7 @@ export class BpmnEditor extends CachedComponent {
                       config={ config }
                       deployment={ deployment }
                       file={ file }
-                      id={ id }
+                      tabId={ tabId }
                       injector={ injector }
                       layout={ layout }
                       linting={ linting }
@@ -996,6 +1100,15 @@ export class BpmnEditor extends CachedComponent {
           engineProfile={ engineProfile }
           onChange={ (engineProfile) => this.engineProfile.set(engineProfile) } />
         }
+
+        <CredentialManager
+          injector={ injector }
+          zeebeApi={ zeebeApi }
+          deployment={ deployment }
+          file={ file }
+          tabId={ tabId }
+          onError={ this.handleError }
+        />
       </div>
     );
   }
@@ -1009,7 +1122,7 @@ export class BpmnEditor extends CachedComponent {
 
     const {
       getPlugins,
-      onAction,
+      emit,
       onError,
       layout = {},
       settings
@@ -1017,11 +1130,8 @@ export class BpmnEditor extends CachedComponent {
 
     // notify interested parties that modeler will be configured
     const handleMiddlewareExtensions = (middlewares) => {
-      onAction('emit-event', {
-        type: 'bpmn.modeler.configure',
-        payload: {
-          middlewares
-        }
+      emit('bpmn.modeler.configure', {
+        middlewares
       });
     };
 
@@ -1044,6 +1154,8 @@ export class BpmnEditor extends CachedComponent {
       );
     }
 
+    const feelPlayground = new FeelPlayground(props.config);
+
     const modeler = new BpmnModeler({
       ...options,
       position: 'absolute',
@@ -1056,7 +1168,6 @@ export class BpmnEditor extends CachedComponent {
         feelPopupContainer: '.bjs-container',
         layout: layout.propertiesPanel
       },
-      elementTemplateChooser: false,
       keyboard: {
         bind: false
       },
@@ -1067,6 +1178,13 @@ export class BpmnEditor extends CachedComponent {
       }
     });
 
+    modeler.get('feelPopup').registerProvider(
+      'feel',
+      createFeelPlaygroundPopup(feelPlayground)
+    );
+
+    feelPlayground.setFile(props.file);
+
     modeler.on('elementTemplates.errors', (event) => {
       console.warn('Element templates errors', event.errors);
     });
@@ -1076,18 +1194,17 @@ export class BpmnEditor extends CachedComponent {
     const stackIdx = commandStack._stackIdx;
 
     // notify interested parties that modeler was created
-    onAction('emit-event', {
-      type: 'bpmn.modeler.created',
-      payload: {
-        modeler
-      }
+    emit('bpmn.modeler.created', {
+      modeler
     });
 
     return {
       __destroy: () => {
+        feelPlayground.saveContexts();
         modeler.destroy();
       },
       engineProfile: null,
+      feelPlayground,
       lastXML: null,
       modeler,
       stackIdx,

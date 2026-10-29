@@ -38,12 +38,21 @@ const ERROR_REASONS = {
   CONTACT_POINT_UNAVAILABLE: 'CONTACT_POINT_UNAVAILABLE',
   UNAUTHORIZED: 'UNAUTHORIZED',
   CLUSTER_UNAVAILABLE: 'CLUSTER_UNAVAILABLE',
+  CLUSTER_TEMPORARILY_UNAVAILABLE: 'CLUSTER_TEMPORARILY_UNAVAILABLE',
   FORBIDDEN: 'FORBIDDEN',
   OAUTH_URL: 'OAUTH_URL',
   UNSUPPORTED_ENGINE: 'UNSUPPORTED_ENGINE',
   INVALID_CLIENT_ID: 'INVALID_CLIENT_ID',
   INVALID_CREDENTIALS: 'INVALID_CREDENTIALS'
 };
+
+// system-level network error codes, raised e.g. by REST calls against an
+// unreachable endpoint
+const NETWORK_ERROR_CODES = [ 'ECONNREFUSED', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH' ];
+
+// HTTP status codes a proxy/ingress returns when the cluster behind it is
+// unreachable, paused or scaled to zero
+const UNAVAILABLE_HTTP_STATUSES = [ 502, 503, 504 ];
 
 const {
   AUTH_TYPES,
@@ -69,6 +78,7 @@ const {
 /**
  * @typedef {typeof import('@camunda8/sdk').Camunda8} Camunda8Constructor
  * @typedef {import('@camunda8/sdk/dist/zeebe').ZeebeGrpcClient} ZeebeGrpcClient
+ * @typedef {import("./endpoints").ClusterVariable} ClusterVariable
  */
 
 class ZeebeAPI {
@@ -373,16 +383,18 @@ class ZeebeAPI {
   }
 
   /**
-   * Search process instances. Requires Camunda REST client.
+   * Search process instances, either by their own key or by the key of their
+   * parent. Requires Camunda REST client.
    *
-   * @param {{ endpoint: import("./endpoints").Endpoint, processInstanceKey: string }} config
+   * @param {{ endpoint: import("./endpoints").Endpoint, processInstanceKey?: string, parentProcessInstanceKey?: string }} config
    *
    * @returns {Promise<{ success: boolean, response?: object, reason?: string }>}
    */
   async searchProcessInstances(config) {
     const {
       endpoint,
-      processInstanceKey
+      processInstanceKey,
+      parentProcessInstanceKey
     } = config;
 
     this._log.debug('search process instances', {
@@ -398,7 +410,8 @@ class ZeebeAPI {
 
       const response = await camundaRestClient.searchProcessInstances({
         filter: {
-          processInstanceKey
+          processInstanceKey,
+          parentProcessInstanceKey
         }
       });
 
@@ -518,7 +531,8 @@ class ZeebeAPI {
   }
 
   /**
-   * Search incidents. Requires Camunda REST client.
+   * Search incidents related to a process instance, including incidents of the
+   * process instances it called. Requires Camunda REST client.
    *
    * @param {{ endpoint: import("./endpoints").Endpoint, processInstanceKey: string }} config
    *
@@ -541,10 +555,10 @@ class ZeebeAPI {
         throw new Error('Camunda REST client is not available');
       }
 
-      const response = await camundaRestClient.searchIncidents({
-        filter: {
-          processInstanceKey
-        }
+      const response = await camundaRestClient.callApiEndpoint({
+        method: 'POST',
+        urlPath: `process-instances/${processInstanceKey}/incidents/search`,
+        body: {}
       });
 
       return {
@@ -714,6 +728,350 @@ class ZeebeAPI {
   }
 
   /**
+   * Get the authenticated user's authorizations for a resource type. Requires
+   * Camunda REST client.
+   *
+   * @param {{ endpoint: import("./endpoints").Endpoint, resourceType: string, page?: object }} config
+   *
+   * @returns {Promise<{ success: boolean, response?: object, reason?: string }>}
+   */
+  async getAuthorizations(config) {
+    const {
+      endpoint,
+      resourceType,
+      page
+    } = config;
+
+    this._log.debug('get authorizations', {
+      parameters: sanitizeConfigWithEndpoint(config)
+    });
+
+    try {
+      const { camundaRestClient } = await this._getClients(endpoint);
+
+      if (!camundaRestClient) {
+        throw new Error('Camunda REST client is not available');
+      }
+
+      const response = await camundaRestClient.callApiEndpoint({
+        method: 'POST',
+        urlPath: 'authentication/me/authorizations/search',
+        body: {
+          filter: {
+            resourceType
+          },
+          ...(page ? { page } : {})
+        }
+      });
+
+      this._log.debug('get authorizations succeeded', {
+        permissionTypes: (response.items || []).flatMap(item => item.permissionTypes || [])
+      });
+
+      return {
+        success: true,
+        response: response
+      };
+    } catch (err) {
+      this._log.error('get authorizations failed', {
+        parameters: sanitizeConfigWithEndpoint(config)
+      }, err);
+
+      return {
+        success: false,
+        reason: getErrorReason(err, endpoint)
+      };
+    }
+  }
+
+  /**
+   * Evaluate a FEEL expression. Requires Camunda REST client.
+   *
+   * @param {{ endpoint: import("./endpoints").Endpoint, expression: string, variables: object }} config
+   *
+   * @returns {Promise<{ success: boolean, response?: object, reason?: string }>}
+   */
+  async evaluateExpression(config) {
+    const {
+      endpoint,
+      expression,
+      variables
+    } = config;
+
+    this._log.debug('evaluate expression', {
+      parameters: sanitizeConfigWithEndpoint(config)
+    });
+
+    try {
+      const { camundaRestClient } = await this._getClients(endpoint);
+
+      if (!camundaRestClient) {
+        throw new Error('Camunda REST client is not available');
+      }
+
+      const response = await camundaRestClient.callApiEndpoint({
+        method: 'POST',
+        urlPath: 'expression/evaluation',
+        body: {
+          expression,
+          variables
+        }
+      });
+
+      return {
+        success: true,
+        response
+      };
+    } catch (err) {
+      this._log.error('evaluate expression failed', {
+        parameters: sanitizeConfigWithEndpoint(config)
+      }, err);
+
+      return {
+        success: false,
+        reason: getErrorReason(err, endpoint)
+      };
+    }
+  }
+
+  /**
+   * Search cluster variables. Requires Camunda REST client.
+   *
+   * @param {{ endpoint: import("./endpoints").Endpoint, filter: object, page?: object }} config
+   *
+   * @returns {Promise<{ success: boolean, response?: object, reason?: string, status?: number }>}
+   */
+  async searchClusterVariables(config) {
+    const {
+      endpoint,
+      filter,
+      page
+    } = config;
+
+    this._log.debug('search cluster variables', {
+      parameters: sanitizeConfigWithEndpoint(config)
+    });
+
+    try {
+      const { camundaRestClient } = await this._getClients(endpoint);
+
+      if (!camundaRestClient) {
+        throw new Error('Camunda REST client is not available');
+      }
+
+      const response = await camundaRestClient.callApiEndpoint({
+        method: 'POST',
+        urlPath: 'cluster-variables/search',
+        body: {
+          filter,
+          ...(page ? { page } : {})
+        }
+      });
+
+      return {
+        success: true,
+        response: response
+      };
+    } catch (err) {
+      this._log.error('search cluster variables failed', {
+        parameters: sanitizeConfigWithEndpoint(config)
+      }, err);
+
+      return {
+        success: false,
+        reason: getErrorReason(err, endpoint),
+        status: getResponseStatus(err)
+      };
+    }
+  }
+
+  /**
+   * Get a single global cluster variable by name, including its value. Requires
+   * Camunda REST client.
+   *
+   * @param {{ endpoint: import("./endpoints").Endpoint, name: string }} config
+   *
+   * @returns {Promise<{ success: boolean, response?: object, reason?: string }>}
+   */
+  async getClusterVariable(config) {
+    const {
+      endpoint,
+      name
+    } = config;
+
+    this._log.debug('get cluster variable', {
+      parameters: sanitizeConfigWithEndpoint(config)
+    });
+
+    try {
+      const { camundaRestClient } = await this._getClients(endpoint);
+
+      if (!camundaRestClient) {
+        throw new Error('Camunda REST client is not available');
+      }
+
+      const response = await camundaRestClient.callApiEndpoint({
+        method: 'GET',
+        urlPath: `cluster-variables/global/${ encodeURIComponent(name) }`
+      });
+
+      return {
+        success: true,
+        response: response
+      };
+    } catch (err) {
+      this._log.error('get cluster variable failed', {
+        parameters: sanitizeConfigWithEndpoint(config)
+      }, err);
+
+      return {
+        success: false,
+        reason: getErrorReason(err, endpoint)
+      };
+    }
+  }
+
+  /**
+   * Create a global cluster variable. Requires Camunda REST client.
+   *
+   * @param {{ endpoint: import("./endpoints").Endpoint, variable: ClusterVariable }} config
+   *
+   * @returns {Promise<{ success: boolean, response?: object, reason?: string }>}
+   */
+  async createClusterVariable(config) {
+    const {
+      endpoint,
+      variable
+    } = config;
+
+    this._log.debug('create cluster variable', {
+      parameters: sanitizeConfigWithEndpoint(config)
+    });
+
+    try {
+      const { camundaRestClient } = await this._getClients(endpoint);
+
+      if (!camundaRestClient) {
+        throw new Error('Camunda REST client is not available');
+      }
+
+      const response = await camundaRestClient.callApiEndpoint({
+        method: 'POST',
+        urlPath: 'cluster-variables/global',
+        body: variable
+      });
+
+      return {
+        success: true,
+        response: response
+      };
+    } catch (err) {
+      this._log.error('create cluster variable failed', {
+        parameters: sanitizeConfigWithEndpoint(config)
+      }, err);
+
+      return {
+        success: false,
+        reason: getErrorReason(err, endpoint)
+      };
+    }
+  }
+
+  /**
+   * Update a global cluster variable by name. Requires Camunda REST client.
+   *
+   * @param {{ endpoint: import("./endpoints").Endpoint, name: string, variable: Omit<ClusterVariable, "name"> }} config
+   *
+   * @returns {Promise<{ success: boolean, response?: object, reason?: string }>}
+   */
+  async updateClusterVariable(config) {
+    const {
+      endpoint,
+      name,
+      variable
+    } = config;
+
+    this._log.debug('update cluster variable', {
+      parameters: sanitizeConfigWithEndpoint(config)
+    });
+
+    try {
+      const { camundaRestClient } = await this._getClients(endpoint);
+
+      if (!camundaRestClient) {
+        throw new Error('Camunda REST client is not available');
+      }
+
+      const response = await camundaRestClient.callApiEndpoint({
+        method: 'PUT',
+        urlPath: `cluster-variables/global/${ encodeURIComponent(name) }`,
+        body: variable
+      });
+
+      return {
+        success: true,
+        response: response
+      };
+    } catch (err) {
+      this._log.error('update cluster variable failed', {
+        parameters: sanitizeConfigWithEndpoint(config)
+      }, err);
+
+      return {
+        success: false,
+        reason: getErrorReason(err, endpoint)
+      };
+    }
+  }
+
+  /**
+   * List the names of the secrets available on the cluster. Requires Camunda
+   * REST client. Returns names only — secret values are never fetched.
+   *
+   * @param {{ endpoint: import("./endpoints").Endpoint }} config
+   *
+   * @returns {Promise<{ success: boolean, response?: object, reason?: string, status?: number }>}
+   */
+  async listSecrets(config) {
+    const {
+      endpoint
+    } = config;
+
+    this._log.debug('list secrets', {
+      parameters: sanitizeConfigWithEndpoint(config)
+    });
+
+    try {
+      const { camundaRestClient } = await this._getClients(endpoint);
+
+      if (!camundaRestClient) {
+        throw new Error('Camunda REST client is not available');
+      }
+
+      const response = await camundaRestClient.callApiEndpoint({
+        method: 'POST',
+        urlPath: 'secrets/list',
+        body: {}
+      });
+
+      return {
+        success: true,
+        response: response
+      };
+    } catch (err) {
+      this._log.error('list secrets failed', {
+        parameters: sanitizeConfigWithEndpoint(config)
+      }, err);
+
+      return {
+        success: false,
+        reason: getErrorReason(err, endpoint),
+        status: getResponseStatus(err)
+      };
+    }
+  }
+
+  /**
    * Get resources based on the provided configs
    *
    * @param {Array<{ path: string, type?: 'bpmn'|'dmn'|'form' | 'rpa' }>} resourceConfigs
@@ -795,6 +1153,20 @@ function getGrpcErrorCode(message) {
 }
 
 /**
+ * Checks whether the error indicates a connection-level network failure, i.e.
+ * the endpoint could not be reached at all.
+ *
+ * @param {Error} error
+ *
+ * @returns {boolean}
+ */
+function isNetworkError(error) {
+  return NETWORK_ERROR_CODES.some(code =>
+    error.code === code || (error.message || '').includes(code)
+  );
+}
+
+/**
  * @param {string} message
  *
  * @returns {number|undefined}
@@ -818,12 +1190,18 @@ function getErrorReason(error, endpoint) {
   } = endpoint;
 
   // (1) handle errors
-  if (code === 14 || code === 13 || httpStatus === 503) {
+  if (code === 14 || code === 13 || isNetworkError(error)) {
     return type === ENDPOINT_TYPES.CAMUNDA_CLOUD
       ? ERROR_REASONS.CLUSTER_UNAVAILABLE
       : ERROR_REASONS.CONTACT_POINT_UNAVAILABLE;
   } else if (code === 12) {
     return ERROR_REASONS.UNSUPPORTED_ENGINE;
+  }
+
+  // (1a) a proxy/ingress answered, but the instance behind it is
+  // unavailable, e.g. paused or still starting up
+  if (httpStatus === 503 || UNAVAILABLE_HTTP_STATUSES.includes(getResponseStatus(error))) {
+    return ERROR_REASONS.CLUSTER_TEMPORARILY_UNAVAILABLE;
   }
 
   // (2) handle <unknown>
@@ -863,6 +1241,16 @@ function getErrorReason(error, endpoint) {
 
 
 function asSerializedError(error) {
-  return pick(error, [ 'message', 'code', 'details' ]);
+  return pick(error, [ 'message', 'code', 'details', 'detail' ]);
+}
+
+// HTTP status code of a failed Camunda REST call, if the request reached the
+// server (undefined for connection-level failures).
+function getResponseStatus(error) {
+  if (!error) {
+    return undefined;
+  }
+
+  return error.statusCode || (error.response && error.response.statusCode);
 }
 

@@ -31,6 +31,10 @@ describe('PropertiesPanelKeyboardBindings', function() {
     container = document.createElement('div');
   });
 
+  afterEach(function() {
+    container.remove();
+  });
+
 
   it('should undo', function() {
 
@@ -89,6 +93,242 @@ describe('PropertiesPanelKeyboardBindings', function() {
 
     // then
     expect(redoSpy).to.have.been.called;
+  });
+
+
+  describe('non-QWERTY layouts', function() {
+
+    it('should undo with physical key code', function() {
+
+      // given
+      const undoSpy = spy();
+
+      const modeler = createModeler({
+        commandStack: {
+          canUndo: () => true,
+          undo: undoSpy
+        },
+        eventBus: {
+          on: (_, callback) => callback()
+        },
+        propertiesPanel: {
+          _container: container
+        }
+      });
+
+      const propertiesPanelKeyboardBindings = modeler.get('propertiesPanelKeyboardBindings');
+
+      const event = createKeyEvent('я', { code: 'KeyZ', ctrlKey: true });
+
+      // when
+      propertiesPanelKeyboardBindings.handleKeydown(event);
+
+      // then
+      expect(undoSpy).to.have.been.calledOnce;
+    });
+
+
+    it('should redo with physical key code', function() {
+
+      // given
+      const redoSpy = spy();
+
+      const modeler = createModeler({
+        commandStack: {
+          canRedo: () => true,
+          redo: redoSpy
+        },
+        eventBus: {
+          on: (_, callback) => callback()
+        },
+        propertiesPanel: {
+          _container: container
+        }
+      });
+
+      const propertiesPanelKeyboardBindings = modeler.get('propertiesPanelKeyboardBindings');
+
+      const event = createKeyEvent('н', { code: 'KeyY', ctrlKey: true });
+
+      // when
+      propertiesPanelKeyboardBindings.handleKeydown(event);
+
+      // then
+      expect(redoSpy).to.have.been.calledOnce;
+    });
+
+
+    it('should redo with physical key code and shift', function() {
+
+      // given
+      const redoSpy = spy();
+
+      const modeler = createModeler({
+        commandStack: {
+          canRedo: () => true,
+          redo: redoSpy
+        },
+        eventBus: {
+          on: (_, callback) => callback()
+        },
+        propertiesPanel: {
+          _container: container
+        }
+      });
+
+      const propertiesPanelKeyboardBindings = modeler.get('propertiesPanelKeyboardBindings');
+
+      const event = createKeyEvent('я', { code: 'KeyZ', ctrlKey: true, shiftKey: true });
+
+      // when
+      propertiesPanelKeyboardBindings.handleKeydown(event);
+
+      // then
+      expect(redoSpy).to.have.been.calledOnce;
+    });
+
+  });
+
+
+  describe('QWERTZ layout', function() {
+
+    it('should prefer logical key for undo', function() {
+
+      // given
+      const undoSpy = spy(),
+            redoSpy = spy();
+
+      const modeler = createModeler({
+        commandStack: {
+          canRedo: () => true,
+          canUndo: () => true,
+          redo: redoSpy,
+          undo: undoSpy
+        },
+        eventBus: {
+          on: (_, callback) => callback()
+        },
+        propertiesPanel: {
+          _container: container
+        }
+      });
+
+      const propertiesPanelKeyboardBindings = modeler.get('propertiesPanelKeyboardBindings');
+
+      const event = createKeyEvent('z', { code: 'KeyY', ctrlKey: true });
+
+      // when
+      propertiesPanelKeyboardBindings.handleKeydown(event);
+
+      // then
+      expect(undoSpy).to.have.been.calledOnce;
+      expect(redoSpy).not.to.have.been.called;
+    });
+
+
+    it('should prefer logical key for redo', function() {
+
+      // given
+      const undoSpy = spy(),
+            redoSpy = spy();
+
+      const modeler = createModeler({
+        commandStack: {
+          canRedo: () => true,
+          canUndo: () => true,
+          redo: redoSpy,
+          undo: undoSpy
+        },
+        eventBus: {
+          on: (_, callback) => callback()
+        },
+        propertiesPanel: {
+          _container: container
+        }
+      });
+
+      const propertiesPanelKeyboardBindings = modeler.get('propertiesPanelKeyboardBindings');
+
+      const event = createKeyEvent('y', { code: 'KeyZ', ctrlKey: true });
+
+      // when
+      propertiesPanelKeyboardBindings.handleKeydown(event);
+
+      // then
+      expect(redoSpy).to.have.been.calledOnce;
+      expect(undoSpy).not.to.have.been.called;
+    });
+
+  });
+
+
+  it('should restore canvas focus when focused element is removed on command', async function() {
+
+    // given
+    const restoreFocusSpy = spy();
+
+    const input = document.createElement('input');
+
+    container.appendChild(input);
+
+    document.body.appendChild(container);
+
+    const modeler = createModeler({
+      canvas: {
+        restoreFocus: restoreFocusSpy
+      },
+      eventBus: {
+        on: (_, callback) => callback()
+      },
+      propertiesPanel: {
+        _container: container
+      }
+    });
+
+    const propertiesPanelKeyboardBindings = modeler.get('propertiesPanelKeyboardBindings');
+
+    input.focus();
+
+    // when
+    propertiesPanelKeyboardBindings.restoreCanvasFocus();
+
+    input.remove();
+
+    await nextTick();
+
+    // then
+    expect(restoreFocusSpy).to.have.been.called;
+  });
+
+
+  it('should not restore canvas focus when properties panel is not focused', async function() {
+
+    // given
+    const restoreFocusSpy = spy();
+
+    document.body.appendChild(container);
+
+    const modeler = createModeler({
+      canvas: {
+        restoreFocus: restoreFocusSpy
+      },
+      eventBus: {
+        on: (_, callback) => callback()
+      },
+      propertiesPanel: {
+        _container: container
+      }
+    });
+
+    const propertiesPanelKeyboardBindings = modeler.get('propertiesPanelKeyboardBindings');
+
+    // when
+    propertiesPanelKeyboardBindings.restoreCanvasFocus();
+
+    await nextTick();
+
+    // then
+    expect(restoreFocusSpy).not.to.have.been.called;
   });
 
 
@@ -163,6 +403,10 @@ function createModeler(dependencies) {
       )
     }
   });
+}
+
+function nextTick() {
+  return new Promise(resolve => setTimeout(resolve, 0));
 }
 
 /**

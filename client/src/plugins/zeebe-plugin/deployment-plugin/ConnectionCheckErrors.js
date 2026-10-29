@@ -22,6 +22,7 @@ export const CONNECTION_CHECK_ERROR_REASONS = {
   UNKNOWN: 'UNKNOWN',
   CONTACT_POINT_UNAVAILABLE: 'CONTACT_POINT_UNAVAILABLE',
   CLUSTER_UNAVAILABLE: 'CLUSTER_UNAVAILABLE',
+  CLUSTER_TEMPORARILY_UNAVAILABLE: 'CLUSTER_TEMPORARILY_UNAVAILABLE',
   UNAUTHORIZED: 'UNAUTHORIZED',
   FORBIDDEN: 'FORBIDDEN',
   OAUTH_URL: 'OAUTH_URL',
@@ -33,13 +34,14 @@ export const CONNECTION_CHECK_ERROR_REASONS = {
 };
 
 export const CONNECTION_CHECK_ERROR_MESSAGES = {
-  [ CONNECTION_CHECK_ERROR_REASONS.CONTACT_POINT_UNAVAILABLE ]: 'Cannot connect to Orchestration Cluster.',
-  [ CONNECTION_CHECK_ERROR_REASONS.CLUSTER_UNAVAILABLE ]: 'Cannot connect to Orchestration Cluster.',
+  [ CONNECTION_CHECK_ERROR_REASONS.CONTACT_POINT_UNAVAILABLE ]: 'Cannot connect to the Camunda 8 instance.',
+  [ CONNECTION_CHECK_ERROR_REASONS.CLUSTER_UNAVAILABLE ]: 'Cannot connect to the Camunda 8 instance.',
+  [ CONNECTION_CHECK_ERROR_REASONS.CLUSTER_TEMPORARILY_UNAVAILABLE ]: 'The Camunda 8 instance is temporarily unavailable. It may be paused or starting up.',
   [ CONNECTION_CHECK_ERROR_REASONS.UNAUTHORIZED ]: 'Credentials rejected by server.',
   [ CONNECTION_CHECK_ERROR_REASONS.FORBIDDEN ]: 'This user is not permitted to deploy. Please use different credentials or get this user enabled to deploy.',
   [ CONNECTION_CHECK_ERROR_REASONS.OAUTH_URL ]: 'Cannot connect to OAuth token endpoint.',
-  [ CONNECTION_CHECK_ERROR_REASONS.UNKNOWN ]: 'Unknown error. Please check Orchestration Cluster status.',
-  [ CONNECTION_CHECK_ERROR_REASONS.UNSUPPORTED_ENGINE ]: 'Unsupported Orchestration Cluster version.',
+  [ CONNECTION_CHECK_ERROR_REASONS.UNKNOWN ]: 'Unknown error. Please check Camunda 8 status.',
+  [ CONNECTION_CHECK_ERROR_REASONS.UNSUPPORTED_ENGINE ]: 'Unsupported Camunda 8 version.',
   [ CONNECTION_CHECK_ERROR_REASONS.INVALID_CLIENT_ID ]: 'Invalid Client ID.',
   [ CONNECTION_CHECK_ERROR_REASONS.INVALID_CREDENTIALS ]: 'The client secret is not valid for the client ID provided.',
   [ CONNECTION_CHECK_ERROR_REASONS.NO_CONFIG ]: 'No connection configured.',
@@ -77,6 +79,15 @@ export function getConnectionCheckError(fieldName, connectionCheckResult) {
     );
   case CONNECTION_CHECK_ERROR_REASONS.CLUSTER_UNAVAILABLE:
     return fieldName === 'endpoint.camundaCloudClusterUrl' && (
+      <>
+        { CONNECTION_CHECK_ERROR_MESSAGES[ reason ] } <a href={ TROUBLESHOOTING_URL }>Troubleshoot</a>
+      </>
+    );
+  case CONNECTION_CHECK_ERROR_REASONS.CLUSTER_TEMPORARILY_UNAVAILABLE:
+    return [
+      'endpoint.camundaCloudClusterUrl',
+      'endpoint.contactPoint'
+    ].includes(fieldName) && (
       <>
         { CONNECTION_CHECK_ERROR_MESSAGES[ reason ] } <a href={ TROUBLESHOOTING_URL }>Troubleshoot</a>
       </>
@@ -153,6 +164,14 @@ export function getConnectionCheckFieldErrors(connectionCheckResult) {
     return {
       _mainError: errorMessageWithTroubleshootLink,
       camundaCloudClusterUrl: errorMessageWithTroubleshootLink
+    };
+
+  case CONNECTION_CHECK_ERROR_REASONS.CLUSTER_TEMPORARILY_UNAVAILABLE:
+    return {
+      _mainError: errorMessageWithTroubleshootLink,
+      camundaCloudClusterUrl: errorMessageWithTroubleshootLink,
+      contactPoint: errorMessageWithTroubleshootLink,
+      plainError: errorMessage,
     };
 
   case CONNECTION_CHECK_ERROR_REASONS.UNSUPPORTED_ENGINE:

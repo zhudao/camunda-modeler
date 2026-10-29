@@ -45,10 +45,8 @@ if (modelers) {
 }
 
 
-module.exports = async function(karma) {
+module.exports = function(karma) {
 
-  // executablePath is async in puppeteer v25+
-  process.env.CHROME_BIN = await require('puppeteer').executablePath();
   karma.set({
 
     frameworks: [
@@ -66,7 +64,7 @@ module.exports = async function(karma) {
       [suite]: [ 'webpack', 'env' ]
     },
 
-    reporters: [ 'progress' ].concat(coverage ? 'coverage' : []),
+    reporters: [ 'tldr' ].concat(coverage ? 'coverage' : []),
 
     coverageReporter: {
       reporters: [
@@ -177,7 +175,6 @@ module.exports = async function(karma) {
           './editor/FormEditor': 'test/mocks/form-js',
           '@camunda/linting': 'test/mocks/linting',
           '@camunda/linting/modeler': 'test/mocks/linting/modeler',
-          'mixpanel-browser': 'test/mocks/mixpanel-browser',
           '../../globals': 'test/mocks/globals'
         }
       },

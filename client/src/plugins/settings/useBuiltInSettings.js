@@ -8,7 +8,7 @@
  * except in compliance with the MIT License.
  */
 
-import { useEffect } from 'react';
+import React, { useEffect } from 'react';
 
 import { find, map } from 'min-dash';
 
@@ -16,6 +16,13 @@ import { ENGINES, ENGINE_PROFILES, getLatestStable } from '../../util/Engines';
 
 import { getAnnotatedVersion, toSemverMinor } from '../../app/tabs/EngineProfile';
 import { utmTag } from '../../util/utmTag';
+
+import {
+  DISABLE_CONNECTOR_TEMPLATES,
+  DISABLE_CONNECTOR_TEMPLATES_FLAG,
+  ElementTemplatesSettingsHeader,
+  TemplateSources
+} from './ElementTemplatesSettings';
 
 /**
  * Registers built-in application settings.
@@ -34,6 +41,14 @@ export const schema = {
   sections: {
     general: {
       title: 'Global settings'
+    },
+    elementTemplates: {
+      title: <ElementTemplatesSettingsHeader />,
+      description: 'Fetch element templates from these sources, in addition to local templates.',
+      documentationUrl: utmTag('https://docs.camunda.io/docs/components/modeler/desktop-modeler/element-templates/configuring-templates/#remote-template-sources'),
+
+      // after "Camunda 8 connections" (order 1)
+      order: 2
     },
     versions: {
       title: 'Default Camunda versions',
@@ -59,14 +74,23 @@ export const schema = {
       restartRequired: true,
       section: 'general'
     },
-    'app.disableConnectorTemplates': {
+
+    // managed by TemplateSources
+    [ DISABLE_CONNECTOR_TEMPLATES ]: {
       type: 'boolean',
       default: false,
-      flag: 'disable-connector-templates',
-      label: 'Disable connector templates',
-      documentationUrl: utmTag('https://docs.camunda.io/docs/components/modeler/desktop-modeler/use-connectors/#automatic-connector-template-fetching'),
+      flag: DISABLE_CONNECTOR_TEMPLATES_FLAG,
+      label: 'Disable Camunda connector templates',
+      hidden: true,
       restartRequired: true,
-      section: 'general'
+      section: 'elementTemplates'
+    },
+    'app.customTemplateSources': {
+      type: 'custom',
+      component: TemplateSources,
+      default: [],
+      restartRequired: true,
+      section: 'elementTemplates'
     },
 
     // TODO(@jarekdanielak): Enable this setting when getEditMenu issue is resolved.

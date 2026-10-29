@@ -12,7 +12,7 @@
 
 const argv = require('mri')(process.argv);
 
-const exec = require('execa').sync;
+const exec = require('execa').execaSync;
 
 const getVersion = require('../app/util/get-version');
 
@@ -29,10 +29,8 @@ const {
 
 console.log('PUBLISH:', typeof publish);
 
-// in case of --nightly, update all package versions to the
-// next minor version with the nightly preid. This will
-// result in app and client being versioned like `v1.2.0-nightly.20191121`.
-// A custom build name can also be used instead.
+// a custom build name may be used for on-demand builds instead of the
+// nightly-versioned artifact name
 let buildName;
 if (onDemand) {
   buildName = process.env.BUILD_NAME;
@@ -40,27 +38,26 @@ if (onDemand) {
 
 const version = getVersion();
 
+// in case of --nightly, update all package versions to the next minor version
+// with the nightly preid before building. This stamps app + client (both
+// private, nothing published) and the lockfile to e.g. `1.2.0-nightly.20191121`
+// via `@bpmn-io/release`, without any git commit/tag (releases go through the
+// `release` script, i.e. `bio-release`, which owns commit/tag).
 if (version !== pkg.version && !dev) {
 
-  const lernaPublishArgs = [
-    'version',
-    `${version}`,
-    '--no-git-tag-version',
-    '--no-push',
-    '--yes'
-  ];
+  const versionArgs = [ 'version', version ];
 
   console.log(`
 Bumping ${pkg.name} version to ${version}
 
 ---
 
-lerna ${ lernaPublishArgs.join(' ') }
+bio-release ${ versionArgs.join(' ') }
 
 ---
 `);
 
-  exec('lerna', lernaPublishArgs, {
+  exec('bio-release', versionArgs, {
     stdio: 'inherit'
   });
 }
@@ -114,12 +111,17 @@ for (const [ key, value ] of Object.entries(windowsSigningOptions)) {
   }
 }
 
-if (publish && (argv.ia32 || argv.x64 || argv.arm64)) {
+if (argv.ia32) {
+  console.error('Windows ia32 builds are no longer supported');
+  process.exit(1);
+}
+
+if (publish && (argv.x64 || argv.arm64)) {
   console.error('Do not override arch; is manually pinned');
   process.exit(1);
 }
 
-const archOptions = [ 'x64', 'ia32', 'arm64' ].filter(a => argv[a]).map(a => `--${a}`);
+const archOptions = [ 'x64', 'arm64' ].filter(a => argv[a]).map(a => `--${a}`);
 
 const extraMetadataOptions = [
   `-c.extraMetadata.SENTRY_DSN=${ process.env.SENTRY_DSN || null }`

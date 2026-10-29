@@ -13,73 +13,34 @@
     .diagram {
       flex: 1;
       position: relative;
+      background-color: var(--app-content-background-color);
     }
   }
 
-  .bjs-container {
-    --bjs-font-family: var(--font-family);
+  /* @camunda/feel-playground popup */
+  .feel-playground-popup .feel-playground-popup__body {
+    display: flex;
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+    min-height: 0;
+    overflow: hidden;
+    align-items: stretch;
+    justify-content: flex-start;
   }
 
-  .bio-properties-panel-header {
-    display: none;
-  }
-
-  /* @camunda/improved-canvas resets */
-  .djs-container.bio-improved-canvas {
-    background-color: var(--color-white);
-  }
-
-  .bio-improved-canvas defs pattern circle {
-    fill: #ccc !important;
-  }
-
-  .djs-minimap {
-
-    .toggle {
-      color: var(--color-grey-225-10-35);
-    }
-
-    .toggle:hover {
-      color: var(--color-blue-205-100-45);
-    }
-
-    &:not(.open) .toggle:before {
-      content: '\f278';
-      font-family: 'app';
-      font-size: 20px;
-    }
-
-    &.open {
-      .toggle {
-        padding: 3px 5px;
-        margin-right: 4px;
-
-        line-height: 24px;
-        text-align: right;
-
-        opacity: 0.5;
-      }
-
-      .toggle:before {
-        content: '\e80a';
-        font-family: 'app';
-        font-size: 14px;
-      }
-
-      .toggle:hover {
-        opacity: 1;
-      }
-
-      .viewport-dom {
-        border-color: var(--color-blue-205-100-50);
-      }
-    }
+  .feel-playground-popup__content,
+  .feel-playground-popup__editor {
+    display: flex;
+    flex: 1;
+    height: 100%;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
   }
 }
 
-:local(.Color) {
-  border: solid 1px var(--color-grey-225-10-15);
-  margin: 4px;
-  width: 64px;
-  height: 16px;
+:global(.feel-playground__context-reset-tooltip) {
+  z-index: 1002;
 }

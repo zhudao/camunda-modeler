@@ -10,8 +10,6 @@
 
 import React from 'react';
 
-import classNames from 'classnames';
-
 import { Section, Select } from '../../../shared/ui';
 import { getMessageForReason, isC8RunConnection } from '../../zeebe-plugin/shared/util';
 import { CONNECTION_CHECK_ERROR_REASONS } from '../deployment-plugin/ConnectionCheckErrors';
@@ -60,6 +58,7 @@ export function ConnectionManagerOverlay({
       const shouldOmitPrefix = [
         CONNECTION_CHECK_ERROR_REASONS.CONTACT_POINT_UNAVAILABLE,
         CONNECTION_CHECK_ERROR_REASONS.CLUSTER_UNAVAILABLE,
+        CONNECTION_CHECK_ERROR_REASONS.CLUSTER_TEMPORARILY_UNAVAILABLE,
         CONNECTION_CHECK_ERROR_REASONS.UNKNOWN
       ].includes(reason);
 
@@ -102,26 +101,21 @@ export function ConnectionManagerOverlay({
       </Section.Header>
       <Section.Body className="form-body">
         <form className="fields">
-          <div className={ classNames('form-group', 'form-group-spacing') }>
-            <div>
-              <Select
-                field={ {
-                  name: 'connection',
-                  onChange: (event) => handleConnectionIdChange(event.target.value)
-                } }
-                className="form-control"
-                name="connection"
-                label={ connectionLabel }
-                options={ connectionOptions }
-                value={ activeConnection?.id }
-                fieldError={ getConnectionFieldError }
-                description={ getConnectionDescription() }
-              />
-            </div>
-          </div>
+          <Select
+            field={ {
+              name: 'connection',
+              onChange: (event) => handleConnectionIdChange(event.target.value)
+            } }
+            name="connection"
+            label={ connectionLabel }
+            options={ connectionOptions }
+            value={ activeConnection?.id }
+            fieldError={ getConnectionFieldError }
+            description={ getConnectionDescription() }
+          />
 
-          <div className={ classNames('form-group form-description') }>
-            A connection to a running <a href={ utmTag('https://docs.camunda.io/docs/components/modeler/desktop-modeler/connect-to-camunda-8/') }>orchestration cluster</a> lets you test tasks, deploy resources, and run processes.
+          <div className="form-description">
+            A connection to <a href={ utmTag('https://docs.camunda.io/docs/components/modeler/desktop-modeler/connect-to-camunda-8/') }>Camunda 8</a> lets you test tasks, deploy resources, and run processes.
           </div>
         </form>
       </Section.Body>

@@ -10,6 +10,8 @@
 
 import React from 'react';
 
+import debug from 'debug';
+
 import { isFunction } from 'min-dash';
 
 import {
@@ -26,7 +28,9 @@ import {
   CachedComponent
 } from '../../cached';
 
-import { Settings } from '@carbon/icons-react';
+import { EventsContext } from '../../EventsContext';
+
+import { Settings } from '@camunda/design-system/icons';
 
 import SidePanel, { DEFAULT_LAYOUT as SIDE_PANEL_DEFAULT_LAYOUT } from '../../side-panel/SidePanel';
 import PropertiesTab from '../../side-panel/tabs/PropertiesTab';
@@ -66,6 +70,8 @@ import {
 
 import EngineProfileHelper from '../EngineProfileHelper';
 
+import LintingHelper from '../LintingHelper';
+
 import {
   ENGINES
 } from '../../../util/Engines';
@@ -87,8 +93,12 @@ export const DEFAULT_ENGINE_PROFILE = {
 
 const LOW_PRIORITY = 500;
 
+const log = debug('BpmnEditor:platform');
+
 
 export class BpmnEditor extends CachedComponent {
+
+  static contextType = EventsContext;
 
   constructor(props) {
     super(props);
@@ -134,12 +144,16 @@ export class BpmnEditor extends CachedComponent {
 
     this.handleResize = debounce(this.handleResize);
 
-    this.handleLintingDebounced = debounce(this.handleLinting.bind(this));
+    this.linting = new LintingHelper({
+      lint: () => this.handleLinting(),
+      getCached: () => this.getCached(),
+      setCached: (state) => this.setCached(state)
+    });
     this.handlePropertiesPanelLayoutChange = this.handlePropertiesPanelLayoutChange.bind(this);
     this.handleLayoutChange = this.handleLayoutChange.bind(this);
   }
 
-  async componentDidMount() {
+  componentDidMount() {
     this._isMounted = true;
 
     const {
@@ -167,17 +181,15 @@ export class BpmnEditor extends CachedComponent {
     propertiesPanel.attachTo(this.propertiesPanelRef.current);
 
 
-    try {
-      await this.loadTemplates();
-    } catch (error) {
-      this.handleError({ error });
-    }
-
     this.checkImport();
+
+    this.linting.resume();
   }
 
   componentWillUnmount() {
     this._isMounted = false;
+
+    this.linting.cancel();
 
     const modeler = this.getModeler();
 
@@ -205,7 +217,7 @@ export class BpmnEditor extends CachedComponent {
       }
     }
 
-    if (prevProps.file !== this.props.file) {
+    if (prevProps.file?.path !== this.props.file?.path) {
       this.loadTemplates();
     }
 
@@ -213,10 +225,19 @@ export class BpmnEditor extends CachedComponent {
 
     const { panel = {} } = layout;
 
-    if (panel.open && panel.tab === 'linting') {
-      this.getModeler().get('linting').activate();
-    } else if (!panel.open || panel.tab !== 'linting') {
-      this.getModeler().get('linting').deactivate();
+    // only toggle linting once the diagram is imported; activating or
+    // deactivating while (re-)importing would access the not yet imported
+    // root element and crash (cf. #6049)
+    const { lastXML } = this.getCached();
+
+    if (lastXML && !this.state.importing && !this.isImportNeeded(prevProps)) {
+      const linting = this.getModeler().get('linting');
+
+      if (panel.open && panel.tab === 'linting') {
+        linting.activate();
+      } else {
+        linting.deactivate();
+      }
     }
 
     if (isPropertiesPanelLayoutChanged(prevProps, this.props)) {
@@ -250,6 +271,8 @@ export class BpmnEditor extends CachedComponent {
 
     modeler[fn]('elementTemplates.errors', this.handleElementTemplateErrors);
 
+    modeler[fn]('elementTemplates.changed', this.handleElementTemplatesChanged);
+
     modeler[fn]('error', 1500, this.handleError);
 
     modeler[fn]('minimap.toggle', this.handleMinimapToggle);
@@ -257,9 +280,18 @@ export class BpmnEditor extends CachedComponent {
     modeler[fn]('propertiesPanel.layoutChanged', this.handlePropertiesPanelLayoutChange);
 
     if (fn === 'on') {
-      modeler[ fn ]('commandStack.changed', LOW_PRIORITY, this.handleLintingDebounced);
+      modeler[ fn ]('commandStack.changed', LOW_PRIORITY, this.linting.schedule);
     } else if (fn === 'off') {
-      modeler[ fn ]('commandStack.changed', this.handleLintingDebounced);
+      modeler[ fn ]('commandStack.changed', this.linting.schedule);
+    }
+
+    // reload templates on focus to pick up external edits to local template
+    // files made while the app was away. The editor owns this decision, not
+    // the app. Cheap: loadTemplates skips re-setting unchanged templates.
+    if (fn === 'on') {
+      this._appFocusedSubscription = this.context.subscribe('app.focused', this.handleAppFocused);
+    } else {
+      this._appFocusedSubscription?.cancel();
     }
   }
 
@@ -269,16 +301,42 @@ export class BpmnEditor extends CachedComponent {
     });
   }
 
+  handleAppFocused = () => {
+    this.loadTemplates().catch(error => this.handleError({ error }));
+  };
+
   async loadTemplates() {
-    const { getConfig } = this.props;
+    const {
+      getConfig,
+      tab
+    } = this.props;
 
     const modeler = this.getModeler();
 
     const templatesLoader = modeler.get('elementTemplatesLoader');
 
-    const templates = await getConfig('bpmn.elementTemplates');
+    const templates = getPlatformTemplates(await getConfig('bpmn.elementTemplates'));
 
-    templatesLoader.setTemplates(getPlatformTemplates(templates));
+    // skip (re-)setting identical templates: setting them re-validates every
+    // template and invalidates the linter. A (re-)load only warrants that work
+    // when the fetched templates actually changed (e.g. edited locally). The
+    // key lives in the (tab-scoped) cache so it survives editor remounts, i.e.
+    // switching away and back to the tab does not re-set unchanged templates.
+    const templatesKey = JSON.stringify(templates);
+
+    if (templatesKey === this.getCached().templatesKey) {
+      log('skip re-setting - element templates unchanged', { tabId: tab?.id, path: this.props.file?.path });
+
+      return;
+    }
+
+    this.setCached({ templatesKey });
+
+    log('setting element templates', { tabId: tab?.id, path: this.props.file?.path });
+
+    templatesLoader.setTemplates(templates);
+
+    log('element templates set', { tabId: tab?.id, path: this.props.file?.path });
   }
 
   undo = () => {
@@ -319,6 +377,20 @@ export class BpmnEditor extends CachedComponent {
     errors.forEach(error => {
       onWarning({ message: error.message });
     });
+  };
+
+  /**
+   * React to the modeler's element templates changing - e.g. after
+   * (re-)loading them. Templates are a linting input, so we let the app
+   * invalidate the (cached) linter for this tab and then re-lint through our
+   * own debounced path - coalescing with any concurrent modeling changes.
+   */
+  handleElementTemplatesChanged = () => {
+    log('element templates changed', { path: this.props.file?.path });
+
+    this.props.onAction('element-templates-changed');
+
+    this.linting.schedule();
   };
 
   handleAttach = (event) => {
@@ -369,7 +441,7 @@ export class BpmnEditor extends CachedComponent {
     return button === 'yes';
   }
 
-  handleImport = (error, warnings) => {
+  handleImport = async (error, warnings) => {
     const {
       isNew,
       onImport,
@@ -391,6 +463,18 @@ export class BpmnEditor extends CachedComponent {
     if (!error) {
       try {
         engineProfile = this.engineProfile.get(true);
+      } catch (err) {
+        error = err;
+      }
+    }
+
+    if (!error) {
+      try {
+
+        // load the element templates now that the diagram is imported, so they
+        // are validated once - against the imported diagram - rather than on
+        // mount (before the document is known)
+        await this.loadTemplates();
       } catch (err) {
         error = err;
       }
@@ -422,11 +506,7 @@ export class BpmnEditor extends CachedComponent {
     }
 
     if (!error) {
-      try {
-        this.handleLinting(engineProfile);
-      } catch (err) {
-        error = err;
-      }
+      this.linting.schedule();
     }
 
     this.setState({
@@ -876,7 +956,7 @@ export class BpmnEditor extends CachedComponent {
 
     const {
       getPlugins,
-      onAction,
+      emit,
       onError,
       layout = {},
       settings
@@ -884,11 +964,8 @@ export class BpmnEditor extends CachedComponent {
 
     // notify interested parties that modeler will be configured
     const handleMiddlewareExtensions = (middlewares) => {
-      onAction('emit-event', {
-        type: 'bpmn.modeler.configure',
-        payload: {
-          middlewares
-        }
+      emit('bpmn.modeler.configure', {
+        middlewares
       });
     };
 
@@ -931,11 +1008,8 @@ export class BpmnEditor extends CachedComponent {
     const stackIdx = commandStack._stackIdx;
 
     // notify interested parties that modeler was created
-    onAction('emit-event', {
-      type: 'bpmn.modeler.created',
-      payload: {
-        modeler
-      }
+    emit('bpmn.modeler.created', {
+      modeler
     });
 
     return {

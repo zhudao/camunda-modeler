@@ -238,7 +238,7 @@ describe('<RPAEditor>', function() {
           expect(onImportSpy).to.have.been.calledOnce;
         });
 
-        instance.handleLinting.flush();
+        instance.linting.flush();
 
         // then
         const calls = onActionSpy.getCalls()
@@ -263,7 +263,7 @@ describe('<RPAEditor>', function() {
           expect(onImportSpy).to.have.been.calledOnce;
         });
 
-        instance.handleLinting.flush();
+        instance.linting.flush();
 
         // when
         const { editor } = instance.getCached();
@@ -272,7 +272,7 @@ describe('<RPAEditor>', function() {
           editor.eventBus.fire('model.changed');
         });
 
-        instance.handleLinting.flush();
+        instance.linting.flush();
 
         // then
         const calls = onActionSpy.getCalls()
@@ -300,7 +300,7 @@ describe('<RPAEditor>', function() {
           expect(onImportSpy).to.have.been.calledOnce;
         });
 
-        instance.handleLinting.flush();
+        instance.linting.flush();
 
         const { editor } = instance.getCached();
 
@@ -349,21 +349,18 @@ describe('<RPAEditor>', function() {
     it('should emit tab.engineProfileChanged event on import', async function() {
 
       // given
-      const onActionSpy = sinon.spy();
+      const emitSpy = sinon.spy();
 
       // when
       renderEditor(RPA, {
-        onAction: onActionSpy
+        emit: emitSpy
       });
 
       // then
       await waitFor(() => {
-        expect(onActionSpy).to.have.been.calledWithMatch('emit-event', {
-          type: 'tab.engineProfileChanged',
-          payload: {
-            executionPlatform: 'Camunda Cloud',
-            executionPlatformVersion: '8.8.0'
-          }
+        expect(emitSpy).to.have.been.calledWithMatch('tab.engineProfileChanged', {
+          executionPlatform: 'Camunda Cloud',
+          executionPlatformVersion: '8.8.0'
         });
       });
     });
@@ -372,13 +369,13 @@ describe('<RPAEditor>', function() {
     it('should emit tab.engineProfileChanged event on set engine profile', async function() {
 
       // given
-      const onActionSpy = sinon.spy();
+      const emitSpy = sinon.spy();
 
       const { instance } = renderEditor(RPA, {
-        onAction: onActionSpy
+        emit: emitSpy
       });
 
-      onActionSpy.resetHistory();
+      emitSpy.resetHistory();
 
       // when
       instance.engineProfile.set({
@@ -388,14 +385,37 @@ describe('<RPAEditor>', function() {
 
       // then
       await waitFor(() => {
-        expect(onActionSpy).to.have.been.calledWithMatch('emit-event', {
-          type: 'tab.engineProfileChanged',
-          payload: {
-            executionPlatform: 'Camunda Cloud',
-            executionPlatformVersion: '8.9.0'
-          }
+        expect(emitSpy).to.have.been.calledWithMatch('tab.engineProfileChanged', {
+          executionPlatform: 'Camunda Cloud',
+          executionPlatformVersion: '8.9.0'
         });
       });
+    });
+
+
+    it('should NOT emit tab.engineProfileChanged event when engine profile unchanged', async function() {
+
+      // given
+      const emitSpy = sinon.spy();
+
+      const { instance } = renderEditor(RPA, {
+        emit: emitSpy
+      });
+
+      await waitFor(() => {
+        expect(emitSpy).to.have.been.calledWith('tab.engineProfileChanged');
+      });
+
+      emitSpy.resetHistory();
+
+      // when
+      instance.engineProfile.setCached({
+        executionPlatform: 'Camunda Cloud',
+        executionPlatformVersion: '8.8.0'
+      });
+
+      // then
+      expect(emitSpy).not.to.have.been.calledWith('tab.engineProfileChanged');
     });
 
   });
@@ -437,6 +457,7 @@ function renderEditor(xml, options = {}) {
       ref={ ref }
       getConfig={ () => ({}) }
       onAction={ noop }
+      emit={ noop }
       onImport={ onImport || noop }
       id={ id || 'editor' }
       xml={ xml }

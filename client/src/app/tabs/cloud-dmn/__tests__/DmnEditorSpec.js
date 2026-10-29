@@ -303,7 +303,8 @@ describe('<DmnEditor>', function() {
           return [];
         },
         onError: onErrorSpy,
-        onAction: noop
+        onAction: noop,
+        emit: noop
       };
 
       // then
@@ -933,6 +934,68 @@ describe('<DmnEditor>', function() {
           expect(hasMenuEntry(state.editMenu, 'Find')).to.be.false;
         });
 
+
+        it('should provide native undo/redo entries when input is focused', async function() {
+
+          // given
+          const changedSpy = sinon.spy();
+
+          const { instance } = await renderEditor(diagramXML, {
+            onChanged: changedSpy
+          });
+
+          const modeler = instance.getModeler();
+
+          modeler.open({ type: 'literalExpression' });
+
+          const input = document.createElement('input');
+          document.body.appendChild(input);
+          input.focus();
+
+          changedSpy.resetHistory();
+
+          // when
+          instance.handleChanged();
+
+          input.remove();
+
+          // then
+          expect(changedSpy).to.be.calledOnce;
+
+          const state = changedSpy.firstCall.args[0];
+
+          expect(getMenuEntry(state.editMenu, 'Undo').role).to.equal('undo');
+          expect(getMenuEntry(state.editMenu, 'Redo').role).to.equal('redo');
+        });
+
+
+        it('should provide editor undo/redo entries when no input is focused', async function() {
+
+          // given
+          const changedSpy = sinon.spy();
+
+          const { instance } = await renderEditor(diagramXML, {
+            onChanged: changedSpy
+          });
+
+          const modeler = instance.getModeler();
+
+          modeler.open({ type: 'literalExpression' });
+
+          changedSpy.resetHistory();
+
+          // when
+          instance.handleChanged();
+
+          // then
+          expect(changedSpy).to.be.calledOnce;
+
+          const state = changedSpy.firstCall.args[0];
+
+          expect(getMenuEntry(state.editMenu, 'Undo').action).to.equal('undo');
+          expect(getMenuEntry(state.editMenu, 'Redo').action).to.equal('redo');
+        });
+
       });
 
 
@@ -987,6 +1050,68 @@ describe('<DmnEditor>', function() {
 
           const state = changedSpy.firstCall.args[0];
           expect(hasMenuEntry(state.editMenu, 'Find')).to.be.false;
+        });
+
+
+        it('should provide native undo/redo entries when input is focused', async function() {
+
+          // given
+          const changedSpy = sinon.spy();
+
+          const { instance } = await renderEditor(diagramXML, {
+            onChanged: changedSpy
+          });
+
+          const modeler = instance.getModeler();
+
+          modeler.open({ type: 'boxedExpression' });
+
+          const input = document.createElement('input');
+          document.body.appendChild(input);
+          input.focus();
+
+          changedSpy.resetHistory();
+
+          // when
+          instance.handleChanged();
+
+          input.remove();
+
+          // then
+          expect(changedSpy).to.be.calledOnce;
+
+          const state = changedSpy.firstCall.args[0];
+
+          expect(getMenuEntry(state.editMenu, 'Undo').role).to.equal('undo');
+          expect(getMenuEntry(state.editMenu, 'Redo').role).to.equal('redo');
+        });
+
+
+        it('should provide editor undo/redo entries when no input is focused', async function() {
+
+          // given
+          const changedSpy = sinon.spy();
+
+          const { instance } = await renderEditor(diagramXML, {
+            onChanged: changedSpy
+          });
+
+          const modeler = instance.getModeler();
+
+          modeler.open({ type: 'boxedExpression' });
+
+          changedSpy.resetHistory();
+
+          // when
+          instance.handleChanged();
+
+          // then
+          expect(changedSpy).to.be.calledOnce;
+
+          const state = changedSpy.firstCall.args[0];
+
+          expect(getMenuEntry(state.editMenu, 'Undo').action).to.equal('undo');
+          expect(getMenuEntry(state.editMenu, 'Redo').action).to.equal('redo');
         });
 
       });
@@ -1281,6 +1406,35 @@ describe('<DmnEditor>', function() {
 
 
   describe('#triggerAction', function() {
+
+    it('should NOT trigger editor action for lint error', async function() {
+
+      // given
+      const triggerSpy = sinon.spy();
+
+      const cache = new Cache();
+
+      cache.add('editor', {
+        cached: {
+          modeler: new DmnModeler({
+            editorActions: {
+              trigger: triggerSpy
+            }
+          })
+        }
+      });
+
+      const { instance } = await renderEditor(diagramXML, { cache });
+
+      triggerSpy.resetHistory();
+
+      // when
+      instance.triggerAction('showLintError', { id: 'foo' });
+
+      // then
+      expect(triggerSpy).not.to.have.been.called;
+    });
+
 
     it('should return value of editor action', async function() {
 
@@ -1802,7 +1956,7 @@ describe('<DmnEditor>', function() {
 
       // then
       // DmnEditor#componentDidMount is async
-      setTimeout(() => {
+      await waitFor(() => {
         expect(isImportNeededSpy).to.have.been.calledOnce;
         expect(isImportNeededSpy).to.have.always.returned(false);
       });
@@ -2149,8 +2303,8 @@ describe('<DmnEditor>', function() {
     beforeEach(function() {
       emittedEvents = [];
 
-      recordActions = (action, options) => {
-        emittedEvents.push(options);
+      recordActions = (type, payload) => {
+        emittedEvents.push({ type, payload });
       };
     });
 
@@ -2158,7 +2312,7 @@ describe('<DmnEditor>', function() {
 
       // when
       await renderEditor(diagramXML, {
-        onAction: recordActions
+        emit: recordActions
       });
 
       // then
@@ -2179,7 +2333,7 @@ describe('<DmnEditor>', function() {
       const {
         instance
       } = await renderEditor(diagramXML, {
-        onAction: recordActions
+        emit: recordActions
       });
 
       // then
@@ -2343,20 +2497,17 @@ describe('<DmnEditor>', function() {
     it('should emit tab.engineProfileChanged event on import', async function() {
 
       // given
-      const onActionSpy = sinon.spy();
+      const emitSpy = sinon.spy();
 
       // when
       await renderEditor(engineProfileXML, {
-        onAction: onActionSpy
+        emit: emitSpy
       });
 
       // then
-      expect(onActionSpy).to.have.been.calledWithMatch('emit-event', {
-        type: 'tab.engineProfileChanged',
-        payload: {
-          executionPlatform: 'Camunda Cloud',
-          executionPlatformVersion: '8.0.0'
-        }
+      expect(emitSpy).to.have.been.calledWithMatch('tab.engineProfileChanged', {
+        executionPlatform: 'Camunda Cloud',
+        executionPlatformVersion: '8.0.0'
       });
     });
 
@@ -2364,13 +2515,13 @@ describe('<DmnEditor>', function() {
     it('should emit tab.engineProfileChanged event on set engine profile', async function() {
 
       // given
-      const onActionSpy = sinon.spy();
+      const emitSpy = sinon.spy();
 
       const { instance } = await renderEditor(engineProfileXML, {
-        onAction: onActionSpy
+        emit: emitSpy
       });
 
-      onActionSpy.resetHistory();
+      emitSpy.resetHistory();
 
       // when
       instance.engineProfile.set({
@@ -2379,13 +2530,32 @@ describe('<DmnEditor>', function() {
       });
 
       // then
-      expect(onActionSpy).to.have.been.calledWithMatch('emit-event', {
-        type: 'tab.engineProfileChanged',
-        payload: {
-          executionPlatform: 'Camunda Cloud',
-          executionPlatformVersion: '8.1.0'
-        }
+      expect(emitSpy).to.have.been.calledWithMatch('tab.engineProfileChanged', {
+        executionPlatform: 'Camunda Cloud',
+        executionPlatformVersion: '8.1.0'
       });
+    });
+
+
+    it('should NOT emit tab.engineProfileChanged event when engine profile unchanged', async function() {
+
+      // given
+      const emitSpy = sinon.spy();
+
+      const { instance } = await renderEditor(engineProfileXML, {
+        emit: emitSpy
+      });
+
+      emitSpy.resetHistory();
+
+      // when
+      instance.engineProfile.setCached({
+        executionPlatform: 'Camunda Cloud',
+        executionPlatformVersion: '8.0.0'
+      });
+
+      // then
+      expect(emitSpy).not.to.have.been.calledWith('tab.engineProfileChanged');
     });
 
   });

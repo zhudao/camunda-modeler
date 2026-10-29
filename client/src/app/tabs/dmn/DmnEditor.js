@@ -35,7 +35,8 @@ import {
 
 import OverviewContainer from './OverviewContainer';
 
-import { Settings } from '@carbon/icons-react';
+import { Button } from '@camunda/design-system';
+import { Settings } from '@camunda/design-system/icons';
 
 import SidePanel, { DEFAULT_LAYOUT as SIDE_PANEL_DEFAULT_LAYOUT } from '../../side-panel/SidePanel';
 import PropertiesTab from '../../side-panel/tabs/PropertiesTab';
@@ -459,7 +460,7 @@ export class DmnEditor extends CachedComponent {
     } else if (activeView.type === 'literalExpression') {
       assign(newState, {
         defaultCopyCutPaste: true,
-        defaultUndoRedo: true,
+        defaultUndoRedo: inputActive,
         removeSelected: true,
         selectAll: true
       });
@@ -475,7 +476,7 @@ export class DmnEditor extends CachedComponent {
       // TODO(@barmac): handle boxed expression differently than literal expression when needed
       assign(newState, {
         defaultCopyCutPaste: true,
-        defaultUndoRedo: true,
+        defaultUndoRedo: inputActive,
         removeSelected: true,
         selectAll: true
       });
@@ -771,6 +772,10 @@ export class DmnEditor extends CachedComponent {
       return this.resetOverview();
     }
 
+    if (action === 'showLintError') {
+      return;
+    }
+
     return modeler.getActiveViewer()
       .get('editorActions')
       .trigger(action, context);
@@ -947,8 +952,8 @@ export class DmnEditor extends CachedComponent {
         {
           !isDrd && (
             <div className="top">
-              <button id="button-edit-drd" className="button" onClick={ this.handleEditDrdClick }>Edit DRD</button>
-              <button id="button-toggle-overview" className="button" onClick={ this.toggleOverview }>{ overviewOpen ? 'Close' : 'Open' } overview</button>
+              <Button id="button-edit-drd" variant="secondary" size="sm" onClick={ this.handleEditDrdClick }>Edit DRD</Button>
+              <Button id="button-toggle-overview" variant="secondary" size="sm" onClick={ this.toggleOverview }>{ overviewOpen ? 'Close' : 'Open' } overview</Button>
             </div>
           )
         }
@@ -965,12 +970,17 @@ export class DmnEditor extends CachedComponent {
             )
           }
 
-          <div className={
-            classNames(
-              'diagram',
-              { 'drd': isDrd }
-            )
-          } ref={ this.ref }></div>
+          <div
+            className={
+              classNames(
+                'diagram',
+                { 'drd': isDrd }
+              )
+            }
+            onFocus={ this.handleChanged }
+            onBlur={ this.handleChanged }
+            ref={ this.ref }>
+          </div>
 
           {
             hasPropertiesPanel && (
@@ -1010,18 +1020,15 @@ export class DmnEditor extends CachedComponent {
 
     const {
       getPlugins,
-      onAction,
+      emit,
       onError,
       settings
     } = props;
 
     // notify interested parties that modeler will be configured
     const handleMiddlewareExtensions = (middlewares) => {
-      onAction('emit-event', {
-        type: 'dmn.modeler.configure',
-        payload: {
-          middlewares
-        }
+      emit('dmn.modeler.configure', {
+        middlewares
       });
     };
 
@@ -1055,11 +1062,8 @@ export class DmnEditor extends CachedComponent {
     const stackIdx = modeler.getStackIdx();
 
     // notify interested parties that modeler was created
-    onAction('emit-event', {
-      type: 'dmn.modeler.created',
-      payload: {
-        modeler
-      }
+    emit('dmn.modeler.created', {
+      modeler
     });
 
     return {

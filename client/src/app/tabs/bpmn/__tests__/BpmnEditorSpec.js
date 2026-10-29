@@ -242,6 +242,7 @@ describe('<BpmnEditor>', function() {
         },
         onError: onErrorSpy,
         onAction: noop,
+        emit: noop,
         settings,
       };
 
@@ -382,7 +383,8 @@ describe('<BpmnEditor>', function() {
 
     describe('behavior', function() {
 
-      let modeler,
+      let instance,
+          modeler,
           onActionSpy,
           rerender;
 
@@ -401,7 +403,7 @@ describe('<BpmnEditor>', function() {
         });
 
 
-        ({ rerender } = await renderEditor(diagramXML, {
+        ({ instance, rerender } = await renderEditor(diagramXML, {
           id: 'editor',
           cache,
           onAction: onActionSpy
@@ -411,8 +413,15 @@ describe('<BpmnEditor>', function() {
 
       it('should lint on import', async function() {
 
-        expect(onActionSpy).to.have.been.calledOnce;
-        expect(onActionSpy).to.have.been.calledWithMatch('lint-tab');
+        // then
+        await waitFor(() => {
+
+          // flush the pending lint instead of waiting out the debounce
+          instance.linting.flush();
+
+          const matchingCalls = onActionSpy.getCalls().filter(call => call.calledWithMatch('lint-tab'));
+          expect(matchingCalls).to.have.lengthOf(1);
+        });
       });
 
 
@@ -422,6 +431,8 @@ describe('<BpmnEditor>', function() {
 
         // when
         modeler._emit('commandStack.changed');
+
+        instance.linting.flush();
 
         // then
         expect(onActionSpy).to.have.been.calledOnce;
@@ -438,6 +449,8 @@ describe('<BpmnEditor>', function() {
           rerender();
 
           modeler._emit('commandStack.changed');
+
+          instance.linting.flush();
 
           // then
           expect(onActionSpy).to.have.been.calledOnce;
@@ -591,6 +604,96 @@ describe('<BpmnEditor>', function() {
 
         // then
         expect(instance.getModeler().get('linting').isActive()).to.be.false;
+      });
+
+
+      it('should not activate while importing (#6049)', async function() {
+
+        // given
+        const { instance } = await renderEditor(diagramXML, {
+          layout: {
+            panel: {
+              open: true,
+              tab: 'linting'
+            }
+          }
+        });
+
+        const linting = instance.getModeler().get('linting');
+
+        const activateSpy = spy(linting, 'activate'),
+              deactivateSpy = spy(linting, 'deactivate');
+
+        // assume a (re-)import is in progress
+        await new Promise(resolve => instance.setState({ importing: true }, resolve));
+
+        // when
+        instance.componentDidUpdate(instance.props);
+
+        // then
+        expect(activateSpy).not.to.have.been.called;
+        expect(deactivateSpy).not.to.have.been.called;
+      });
+
+
+      it('should not deactivate while importing (#6049)', async function() {
+
+        // given
+        const { instance } = await renderEditor(diagramXML, {
+          layout: {
+            panel: {
+              open: false
+            }
+          }
+        });
+
+        const linting = instance.getModeler().get('linting');
+
+        const activateSpy = spy(linting, 'activate'),
+              deactivateSpy = spy(linting, 'deactivate');
+
+        // assume a (re-)import is in progress
+        await new Promise(resolve => instance.setState({ importing: true }, resolve));
+
+        // when
+        instance.componentDidUpdate(instance.props);
+
+        // then
+        expect(deactivateSpy).not.to.have.been.called;
+        expect(activateSpy).not.to.have.been.called;
+      });
+
+
+      it('should not toggle while an import is pending (#6049)', async function() {
+
+        // given
+        const { instance } = await renderEditor(diagramXML, {
+          layout: {
+            panel: {
+              open: true,
+              tab: 'linting'
+            }
+          }
+        });
+
+        // props are out of sync with the imported diagram => import pending
+        instance.setCached({ lastXML: '<foo />' });
+
+        await waitFor(() => {
+          expect(instance.getCached().lastXML).to.equal('<foo />');
+        });
+
+        const linting = instance.getModeler().get('linting');
+
+        const activateSpy = spy(linting, 'activate'),
+              deactivateSpy = spy(linting, 'deactivate');
+
+        // when re-rendered before the pending import completes
+        instance.componentDidUpdate({ ...instance.props, xml: 'previous' });
+
+        // then
+        expect(activateSpy).not.to.have.been.called;
+        expect(deactivateSpy).not.to.have.been.called;
       });
 
     });
@@ -1630,7 +1733,7 @@ describe('<BpmnEditor>', function() {
 
       // then
       // BpmnEditor#componentDidMount is async
-      setTimeout(() => {
+      await waitFor(() => {
         expect(isImportNeededSpy).to.have.been.calledOnce;
         expect(isImportNeededSpy).to.have.always.returned(false);
       });
@@ -1710,7 +1813,37 @@ describe('<BpmnEditor>', function() {
     });
 
 
-    it('should reload templates on save', async function() {
+    it('should load element templates on import', async function() {
+
+      // given
+      const setTemplatesSpy = sinon.spy();
+
+      const cache = new Cache();
+
+      cache.add('editor', {
+        cached: {
+          modeler: new BpmnModeler({
+            modules: {
+              elementTemplatesLoader: { setTemplates: setTemplatesSpy }
+            }
+          })
+        }
+      });
+
+      // when
+      await renderEditor(diagramXML, {
+        cache,
+        isNew: false,
+        getConfig: () => Promise.resolve([ { 'id': 'template-1' } ])
+      });
+
+      // then
+      // templates are loaded once, on import
+      expect(setTemplatesSpy).to.be.calledOnce;
+    });
+
+
+    it('should not reload templates on save (unchanged path)', async function() {
 
       // given
       const getConfigSpy = sinon.spy(),
@@ -1739,24 +1872,214 @@ describe('<BpmnEditor>', function() {
       setTemplatesSpy.resetHistory();
 
       // when
+      // save replaces the file object, but the path is unchanged
       rerender(diagramXML, {
         file: { path: '/bar' }
       });
 
       // expect
-      await waitFor(() => {
-        expect(getConfigSpy).to.be.calledOnce;
+      // templates are NOT re-fetched / re-validated on save
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(getConfigSpy).not.to.have.been.called;
+      expect(setTemplatesSpy).not.to.have.been.called;
+    });
+
+
+    it('should reload templates when file path changes', async function() {
+
+      // given
+      let call = 0;
+
+      const getConfigStub = sinon.stub().callsFake(() => Promise.resolve([
+        { 'id': `template-${ call++ }` }
+      ]));
+
+      const setTemplatesSpy = sinon.spy(),
+            elementTemplatesLoaderMock = { setTemplates: setTemplatesSpy };
+
+      const cache = new Cache();
+
+      cache.add('editor', {
+        cached: {
+          modeler: new BpmnModeler({
+            modules: {
+              elementTemplatesLoader: elementTemplatesLoaderMock
+            }
+          })
+        }
       });
-      expect(getConfigSpy).to.be.calledWith('bpmn.elementTemplates');
+
+      const { rerender } = await renderEditor(diagramXML, {
+        cache,
+        getConfig: getConfigStub,
+        file: { path: '/bar' }
+      });
+
+      getConfigStub.resetHistory();
+      setTemplatesSpy.resetHistory();
+
+      // when
+      // e.g. save-as to a new path, exposing different local templates
+      rerender(diagramXML, {
+        file: { path: '/baz' }
+      });
+
+      // expect
+      await waitFor(() => {
+        expect(getConfigStub).to.be.calledOnce;
+      });
+      expect(getConfigStub).to.be.calledWith('bpmn.elementTemplates');
       expect(setTemplatesSpy).to.be.calledOnce;
+    });
+
+
+    it('should reload templates when the app regains focus', async function() {
+
+      // given
+      // each fetch returns different templates so the reload is applied
+      let call = 0;
+
+      const getConfigStub = sinon.stub().callsFake(() => Promise.resolve([
+        { 'id': `template-${ call++ }` }
+      ]));
+
+      const setTemplatesSpy = sinon.spy(),
+            elementTemplatesLoaderMock = { setTemplates: setTemplatesSpy };
+
+      const cache = new Cache();
+
+      cache.add('editor', {
+        cached: {
+          modeler: new BpmnModeler({
+            modules: {
+              elementTemplatesLoader: elementTemplatesLoaderMock
+            }
+          })
+        }
+      });
+
+      const { emit } = await renderEditor(diagramXML, {
+        cache,
+        getConfig: getConfigStub
+      });
+
+      getConfigStub.resetHistory();
+      setTemplatesSpy.resetHistory();
+
+      // when
+      // an external process may have edited local templates while away
+      emit('app.focused');
+
+      // then
+      await waitFor(() => {
+        expect(getConfigStub).to.be.calledOnce;
+      });
+      expect(getConfigStub).to.be.calledWith('bpmn.elementTemplates');
+      expect(setTemplatesSpy).to.be.calledOnce;
+    });
+
+
+    it('should not re-set unchanged templates when the app regains focus', async function() {
+
+      // given
+      const getConfigStub = sinon.stub().resolves([ { 'id': 'template-1' } ]);
+
+      const setTemplatesSpy = sinon.spy();
+
+      const cache = new Cache();
+
+      cache.add('editor', {
+        cached: {
+          modeler: new BpmnModeler({
+            modules: {
+              elementTemplatesLoader: { setTemplates: setTemplatesSpy }
+            }
+          })
+        }
+      });
+
+      const { emit } = await renderEditor(diagramXML, {
+        cache,
+        getConfig: getConfigStub
+      });
+
+      // templates were set once on mount
+      expect(setTemplatesSpy).to.be.calledOnce;
+
+      // when
+      // focus fetches the same templates
+      emit('app.focused');
+
+      // then
+      // identical templates are not re-applied (no re-validation, linter kept)
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(setTemplatesSpy).to.be.calledOnce;
+    });
+
+
+    it('should not reload templates on focus after unmount', async function() {
+
+      // given
+      let call = 0;
+
+      const getConfigStub = sinon.stub().callsFake(() => Promise.resolve([
+        { 'id': `template-${ call++ }` }
+      ]));
+
+      const { emit, unmount } = await renderEditor(diagramXML, {
+        getConfig: getConfigStub
+      });
+
+      getConfigStub.resetHistory();
+
+      // when
+      // the subscription is cancelled on unmount
+      unmount();
+
+      emit('app.focused');
+
+      // then
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(getConfigStub).not.to.have.been.called;
+    });
+
+
+    it('should invalidate linter and re-lint when element templates change', async function() {
+
+      // given
+      const onActionSpy = sinon.spy();
+
+      const { instance } = await renderEditor(diagramXML, {
+        onAction: onActionSpy
+      });
+
+      onActionSpy.resetHistory();
+
+      // when
+      instance.getModeler()._emit('elementTemplates.changed');
+
+      instance.linting.flush();
+
+      // then
+      // the app is asked to invalidate the cached linter for this tab ...
+      expect(onActionSpy).to.have.been.calledWith('element-templates-changed');
+
+      // ... and the editor re-lints through its own (debounced) path
+      expect(onActionSpy).to.have.been.calledWithMatch('lint-tab');
     });
 
 
     it('should reload templates on action triggered', async function() {
 
       // given
-      const getConfigSpy = sinon.spy(),
-            elementTemplatesLoaderStub = sinon.stub({ setTemplates() {} });
+      // each fetch returns different templates so the reload is applied
+      let call = 0;
+
+      const getConfigStub = sinon.stub().callsFake(() => Promise.resolve([
+        { 'id': `template-${ call++ }` }
+      ]));
+
+      const elementTemplatesLoaderStub = sinon.stub({ setTemplates() {} });
 
       const cache = new Cache();
 
@@ -1773,15 +2096,52 @@ describe('<BpmnEditor>', function() {
       // when
       const { instance } = await renderEditor(diagramXML, {
         cache,
-        getConfig: getConfigSpy
+        getConfig: getConfigStub
       });
 
       await instance.triggerAction('elementTemplates.reload');
 
       // expect
-      expect(getConfigSpy).to.be.calledTwice;
-      expect(getConfigSpy).to.be.always.calledWith('bpmn.elementTemplates');
+      expect(getConfigStub).to.be.calledTwice;
+      expect(getConfigStub).to.be.always.calledWith('bpmn.elementTemplates');
       expect(elementTemplatesLoaderStub.setTemplates).to.be.calledTwice;
+    });
+
+
+    it('should not re-set unchanged templates on reload', async function() {
+
+      // given
+      const getConfigStub = sinon.stub().resolves([ { 'id': 'template-1' } ]);
+
+      const setTemplatesSpy = sinon.spy();
+
+      const cache = new Cache();
+
+      cache.add('editor', {
+        cached: {
+          modeler: new BpmnModeler({
+            modules: {
+              elementTemplatesLoader: { setTemplates: setTemplatesSpy }
+            }
+          })
+        }
+      });
+
+      const { instance } = await renderEditor(diagramXML, {
+        cache,
+        getConfig: getConfigStub
+      });
+
+      // templates were set once on mount
+      expect(setTemplatesSpy).to.be.calledOnce;
+
+      // when
+      // reload fetches the same templates
+      await instance.triggerAction('elementTemplates.reload');
+
+      // then
+      // identical templates are not re-applied (no re-validation, linter kept)
+      expect(setTemplatesSpy).to.be.calledOnce;
     });
 
 
@@ -2199,8 +2559,8 @@ describe('<BpmnEditor>', function() {
     beforeEach(function() {
       emittedEvents = [];
 
-      recordActions = (action, options) => {
-        emittedEvents.push(options);
+      recordActions = (type, payload) => {
+        emittedEvents.push({ type, payload });
       };
     });
 
@@ -2208,7 +2568,7 @@ describe('<BpmnEditor>', function() {
 
       // when
       await renderEditor(diagramXML, {
-        onAction: recordActions
+        emit: recordActions
       });
 
       // then
@@ -2229,7 +2589,7 @@ describe('<BpmnEditor>', function() {
       const {
         instance
       } = await renderEditor(diagramXML, {
-        onAction: recordActions
+        emit: recordActions
       });
 
       // then

@@ -20,7 +20,10 @@ import { render, waitFor, screen } from '@testing-library/react';
 
 import TaskTestingTab, {
   CANNOT_CONNECT_TITLE,
+  DEFAULT_CONFIGURE_DESCRIPTION,
+  LINTING_ERRORS_DESCRIPTION,
   LINTING_ERRORS_TITLE,
+  SHOW_PROBLEMS_LABEL,
   UNSUPPORTED_EXECUTION_PLATFORM_VERSION_TITLE,
   UNSUPPORTED_PROTOCOL_TITLE
 } from '../TaskTestingTab';
@@ -52,7 +55,7 @@ describe('<TaskTestingTab>', function() {
     renderTab(modeler);
 
     // then
-    expect(screen.getByText('Select a task or subprocess to start testing.')).to.exist;
+    expect(screen.getByText('Select a task, subprocess, or call activity to start testing.')).to.exist;
   });
 
 
@@ -66,6 +69,19 @@ describe('<TaskTestingTab>', function() {
 
     // then
     expect(screen.getByRole('button', { name: 'Run test' })).to.exist;
+  });
+
+
+  it('should label the configure button without connection or linting errors', async function() {
+
+    // given
+    renderTab(modeler);
+
+    // when
+    await selectElement(modeler, 'Task_1');
+
+    // then
+    expect(await screen.findByRole('button', { name: DEFAULT_CONFIGURE_DESCRIPTION })).to.exist;
   });
 
 
@@ -113,7 +129,7 @@ describe('<TaskTestingTab>', function() {
       await selectElement(modeler, 'Task_1');
 
       // when
-      const button = await screen.findByTestId('test-task-btn');
+      const button = await screen.findByTestId('configure-btn');
 
       button.click();
 
@@ -166,7 +182,7 @@ describe('<TaskTestingTab>', function() {
       await selectElement(modeler, 'Task_1');
 
       // when
-      const button = await screen.findByTestId('test-task-btn');
+      const button = await screen.findByTestId('configure-btn');
 
       button.click();
 
@@ -213,7 +229,7 @@ describe('<TaskTestingTab>', function() {
       await selectElement(modeler, 'Task_1');
 
       // when
-      const button = await screen.findByTestId('test-task-btn');
+      const button = await screen.findByTestId('configure-btn');
 
       button.click();
 
@@ -250,7 +266,94 @@ describe('<TaskTestingTab>', function() {
     });
 
 
+    it('should describe linting errors (linting errors)', async function() {
+
+      // given
+      renderTab(modeler, {
+        connectionCheckResult: {
+          success: true,
+          response: {
+            protocol: 'rest',
+            gatewayVersion: '8.8.0'
+          }
+        },
+        linting: [
+          { category: 'error' }
+        ]
+      });
+
+      // when
+      await selectElement(modeler, 'Task_1');
+
+      // then
+      await waitFor(() => {
+        expect(screen.getByText(LINTING_ERRORS_DESCRIPTION)).to.exist;
+        expect(screen.getByText(SHOW_PROBLEMS_LABEL)).to.exist;
+      });
+    });
+
+
+    it('should show linting error while the connection check is pending', async function() {
+
+      // given
+      renderTab(modeler, {
+        connectionCheckPending: true,
+        linting: [
+          { category: 'error' }
+        ]
+      });
+
+      // when
+      await selectElement(modeler, 'Task_1');
+
+      // then
+      await waitFor(() => {
+        expect(screen.getByText(LINTING_ERRORS_TITLE)).to.exist;
+        expect(screen.queryByText(CANNOT_CONNECT_TITLE)).not.to.exist;
+      });
+    });
+
+
     it('should start execution and open linting panel on click (linting errors)', async function() {
+
+      // given
+      const onAction = sinon.spy();
+      const emit = sinon.spy();
+
+      renderTab(modeler, {
+        connectionCheckResult: {
+          success: true,
+          response: {
+            protocol: 'rest',
+            gatewayVersion: '8.8.0'
+          }
+        },
+        linting: [
+          { category: 'error' }
+        ],
+        onAction,
+        emit
+      });
+
+      await selectElement(modeler, 'Task_1');
+
+      // when
+      const button = await screen.findByTestId('test-task-btn');
+
+      button.click();
+
+      // then
+      await waitFor(() => {
+        expect(emit).to.have.been.calledWith('taskTesting.started', {
+          element: modeler.get('elementRegistry').get('Task_1')
+        });
+      });
+
+      expect(onAction).to.have.been.calledWith('open-panel', { tab: 'linting' });
+    });
+
+
+    it('should open linting panel on configure click (linting errors)', async function() {
 
       // given
       const onAction = sinon.spy();
@@ -272,21 +375,14 @@ describe('<TaskTestingTab>', function() {
       await selectElement(modeler, 'Task_1');
 
       // when
-      const button = await screen.findByTestId('test-task-btn');
+      const button = await screen.findByTestId('configure-btn');
 
       button.click();
 
       // then
       await waitFor(() => {
-        expect(onAction).to.have.been.calledWith('emit-event', {
-          type: 'taskTesting.started',
-          payload: {
-            element: modeler.get('elementRegistry').get('Task_1')
-          }
-        });
+        expect(onAction).to.have.been.calledWith('open-panel', { tab: 'linting' });
       });
-
-      expect(onAction).to.have.been.calledWith('open-panel', { tab: 'linting' });
     });
 
   });
@@ -320,7 +416,6 @@ describe('<TaskTestingTab>', function() {
 
       // when
       await selectElement(modeler, 'Task_1');
-      screen.getByRole('tab', { name: 'Result' }).click();
 
       // then
       await waitFor(() => {
@@ -359,10 +454,11 @@ describe('<TaskTestingTab>', function() {
 
       // when
       await selectElement(modeler, 'Task_1');
-      screen.getByRole('tab', { name: 'Result' }).click();
 
       // then
-      expect(screen.queryByText('Open in Operate')).to.not.exist;
+      await waitFor(() => {
+        expect(screen.queryByText('Open in Operate')).to.not.exist;
+      });
     });
   });
 
@@ -415,11 +511,12 @@ function renderTab(modeler, options = {}) {
       path: 'foo.bpmn'
     },
     onAction: () => {},
+    emit: () => {},
     ...options
   };
 
   const mockSubscribe = (event, listener) => {
-    if (event === 'connectionManager.connectionStatusChanged' && connectionCheckResult) {
+    if (event === 'connectionManager.connectionStatusChanged' && connectionCheckResult && !options.connectionCheckPending) {
       setTimeout(() => listener(connectionCheckResult), 0);
     }
     return {
@@ -428,7 +525,8 @@ function renderTab(modeler, options = {}) {
   };
 
   const eventsContext = {
-    subscribe: mockSubscribe
+    subscribe: mockSubscribe,
+    emit: props.emit
   };
 
   render(

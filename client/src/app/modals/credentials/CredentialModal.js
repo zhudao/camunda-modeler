@@ -1,0 +1,627 @@
+/**
+ * Copyright Camunda Services GmbH and/or licensed to Camunda Services GmbH
+ * under one or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information regarding copyright
+ * ownership.
+ *
+ * Camunda licenses this file to you under the MIT; you may not use this file
+ * except in compliance with the MIT License.
+ */
+
+import React, { PureComponent } from 'react';
+
+import {
+  Alert,
+  Button,
+  Heading,
+  InlineCode,
+  Input,
+  Label,
+  Link,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Text
+} from '@camunda/design-system';
+
+import {
+  Modal
+} from '../../../shared/ui';
+
+import { ComboBox } from '../../../shared/ui/form';
+
+import { Loader } from '../../primitives';
+
+import {
+  getFieldKey,
+  getFieldGroups,
+  getVisibleProperties
+} from './credentialForm';
+
+import {
+  getFieldError,
+  isFieldRequired
+} from './config';
+
+import {
+  generateCredentialIdSuffix,
+  getUniqueCredentialIdentity,
+  getCredentialIdError,
+  toRandomCredentialId
+} from './credentialId';
+
+import * as css from './CredentialModal.css';
+
+import { debounce } from '../../../util';
+
+import { utmTag } from '../../../util/utmTag';
+
+const TITLES = {
+  create: 'Add credential',
+  edit: 'Edit credential',
+  upgrade: 'Upgrade credential'
+};
+
+const SUBMIT_LABELS = {
+  create: 'Create and select',
+  edit: 'Save',
+  upgrade: 'Save'
+};
+
+const SECRET_REFERENCE_PLACEHOLDER = 'camunda.secrets.SECRET_NAME';
+
+const SECRET_REFERENCE_PREFIX = 'camunda.secrets.';
+
+const SECRET_MANAGEMENT_DOCS_URL = utmTag('https://docs.camunda.io/docs/components/concepts/secrets/');
+
+const SECRET_MANAGEMENT_DOCS_LINK = (
+  <Link href={ SECRET_MANAGEMENT_DOCS_URL } target="_blank" rel="noopener noreferrer">Learn more</Link>
+);
+
+const EMPTY_CHOICE_LABEL = 'None';
+
+class CredentialModal extends PureComponent {
+  constructor(props) {
+    super(props);
+
+    const credentialIdSuffix = props.mode === 'create'
+      ? generateCredentialIdSuffix()
+      : null;
+    const identity = props.mode === 'create'
+      ? getUniqueCredentialIdentity(
+        props.displayName || '',
+        props.existingCredentials,
+        credentialIdSuffix
+      )
+      : {
+        displayName: props.displayName || '',
+        credentialId: props.credentialName || ''
+      };
+
+    this.state = {
+      displayName: identity.displayName,
+      credentialName: identity.credentialId,
+      credentialIdSuffix,
+      initialValues: props.initialValues,
+      values: props.initialValues || {},
+      checkedValues: props.initialValues || {},
+      changedValues: false,
+      submitting: false,
+      error: null
+    };
+
+    this.commitCheckedValues = debounce(() => this.setState(state => ({ checkedValues: state.values })));
+  }
+
+  static getDerivedStateFromProps(props, state) {
+    if (props.initialValues === state.initialValues) {
+      return null;
+    }
+
+    if (state.changedValues) {
+      return { initialValues: props.initialValues };
+    }
+
+    return {
+      initialValues: props.initialValues,
+      values: props.initialValues || {},
+      checkedValues: props.initialValues || {}
+    };
+  }
+
+  componentWillUnmount() {
+    this.commitCheckedValues.cancel();
+  }
+
+  getProperties() {
+    const { configurationTemplate } = this.props;
+
+    return (configurationTemplate && configurationTemplate.properties) || [];
+  }
+
+  getVisibleFields() {
+    return getVisibleProperties(this.getProperties(), this.state.values);
+  }
+
+  getVisibleFieldGroups() {
+    const { configurationTemplate } = this.props;
+
+    return getFieldGroups(
+      this.getVisibleFields().filter(field => field.type !== 'Hidden'),
+      configurationTemplate && configurationTemplate.groups
+    );
+  }
+
+  getCredentialName() {
+    return this.state.credentialName;
+  }
+
+  canSubmit() {
+    const { credentialName, values, submitting } = this.state;
+    const { loading } = this.props;
+
+    if (
+      loading
+      || submitting
+      || getCredentialIdError(credentialName)
+      || this.getDuplicateDisplayNameError()
+      || this.getDuplicateCredentialNameError()
+    ) {
+      return false;
+    }
+
+    return this.getVisibleFields().every(
+      field => !getFieldError(field, values[ getFieldKey(field) ])
+    );
+  }
+
+  getOtherCredentials() {
+    const { credentialName, existingCredentials = [], mode } = this.props;
+
+    return mode === 'create'
+      ? existingCredentials
+      : existingCredentials.filter(credential => credential.name !== credentialName);
+  }
+
+  getDuplicateDisplayNameError() {
+    const displayName = this.state.displayName.trim();
+
+    if (!displayName) {
+      return null;
+    }
+
+    const duplicate = this.getOtherCredentials().some(
+      credential => credential.metadata?.displayName?.trim() === displayName
+    );
+
+    return duplicate
+      ? 'A credential with this name already exists. Choose a different name.'
+      : null;
+  }
+
+  getDuplicateCredentialNameError() {
+    const duplicate = this.getOtherCredentials().some(
+      credential => credential.name === this.state.credentialName
+    );
+
+    return duplicate
+      ? 'A credential with this ID already exists. Choose a different ID.'
+      : null;
+  }
+
+  handleDisplayNameChange = (event) => {
+    const displayName = event.target.value;
+
+    this.setState(({ credentialIdSuffix, credentialName }) => ({
+      displayName,
+      credentialName: this.props.mode === 'create'
+        ? toRandomCredentialId(displayName, credentialIdSuffix)
+        : credentialName
+    }));
+  };
+
+  handleFieldChange(id, value) {
+    this.setState(state => ({
+      values: {
+        ...state.values,
+        [ id ]: value
+      },
+      changedValues: true
+    }));
+
+    this.commitCheckedValues();
+  }
+
+  handleSubmit = async () => {
+    this.setState({ submitting: true, error: null });
+
+    try {
+      await this.props.onSubmit({
+        displayName: this.state.displayName.trim(),
+        name: this.getCredentialName(),
+        values: this.state.values
+      });
+
+      // on success the parent unmounts this modal
+    } catch (error) {
+      this.setState({
+        submitting: false,
+        error: error.message || 'Something went wrong.'
+      });
+    }
+  };
+
+  renderField(field) {
+    const { values, checkedValues } = this.state;
+    const { secretReferences } = this.props;
+
+    const fieldKey = getFieldKey(field);
+    const id = `credential-field-${ fieldKey }`;
+    const errorId = `${ id }-error`;
+    const warningId = `${ id }-warning`;
+    const value = values[ fieldKey ] ?? '';
+    const required = isFieldRequired(field);
+
+    const validationError = getFieldError(field, value);
+
+    const secretField = isSecretField(field);
+
+    const missingSecret = secretField
+      ? getMissingSecretReference(checkedValues[ fieldKey ] ?? '', secretReferences)
+      : null;
+
+    const fieldError = validationError;
+
+    // Non-blocking nudges, distinct from `fieldError`: a plain-text value (no
+    // reference anywhere in the value), a bare prefix (an incomplete reference,
+    // stored verbatim by the engine), or a reference to a not-yet-existing secret
+    // is still saved (there is no create-secret API to redirect the user to), so
+    // these are flagged as hints rather than treated as invalid. Plain text takes
+    // precedence: the value contains no reference at all.
+    const plainTextSecret = isPlainTextSecretValue(field, value);
+    const incompleteReference = !plainTextSecret && isIncompleteSecretReference(field, value);
+
+    const fieldWarning = !fieldError && (plainTextSecret
+      ? (
+        <>
+          Storing this as plaintext exposes sensitive information on the connected
+          { ' Camunda instance. Reference a secret instead, e.g. ' }
+          <InlineCode>{ SECRET_REFERENCE_PREFIX }NAME</InlineCode>.
+          { ' ' }{ SECRET_MANAGEMENT_DOCS_LINK }.
+        </>
+      )
+      : incompleteReference
+        ? (
+          <>
+            Incomplete secret reference: <InlineCode>{ SECRET_REFERENCE_PREFIX }</InlineCode> is missing the secret name.
+            { ' ' }{ SECRET_MANAGEMENT_DOCS_LINK }.
+          </>
+        )
+        : missingSecret
+          ? (
+            <>
+              Secret <InlineCode>{ missingSecret }</InlineCode> does not exist on the connected Camunda instance.
+              { ' ' }{ SECRET_MANAGEMENT_DOCS_LINK }.
+            </>
+          )
+          : null);
+
+    const describedBy = fieldError ? errorId : (fieldWarning ? warningId : undefined);
+
+    return (
+      <div
+        className="credential-modal-field"
+        key={ fieldKey }
+        data-invalid={ fieldError ? '' : undefined }
+        data-warning={ !fieldError && fieldWarning ? '' : undefined }
+      >
+        <Label htmlFor={ id } required={ required }>
+          { field.label || fieldKey }
+        </Label>
+        {
+          field.type === 'Dropdown'
+            ? this.renderDropdown(field, id, value, fieldError, describedBy)
+            : secretField
+              ? (
+                <ComboBox
+                  id={ id }
+                  options={ secretReferences || [] }
+                  value={ value }
+                  placeholder={ SECRET_REFERENCE_PLACEHOLDER }
+                  aria-invalid={ fieldError ? 'true' : undefined }
+                  aria-describedby={ describedBy }
+                  onChange={ value => this.handleFieldChange(fieldKey, value) }
+                />
+              )
+              : (
+                <Input
+                  id={ id }
+                  type="text"
+                  value={ value }
+                  placeholder={ field.secret ? SECRET_REFERENCE_PLACEHOLDER : undefined }
+                  aria-invalid={ fieldError ? 'true' : undefined }
+                  aria-describedby={ describedBy }
+                  onChange={ event => this.handleFieldChange(fieldKey, event.target.value) }
+                />
+              )
+        }
+        { fieldError && (
+          <Text as="p" variant="helper" className="credential-modal-error" id={ errorId }>
+            { fieldError }
+          </Text>
+        ) }
+        {
+
+          /*
+           * Mounted for every secret field, not only once a warning exists: several screen
+           * readers only announce a change to a live region already in the accessible tree,
+           * not one inserted together with its content already set.
+           */
+
+          isSecretField(field) && (
+            <Text as="p" variant="helper" className="credential-modal-warning" id={ warningId } role="status">
+              { fieldWarning }
+            </Text>
+          )
+        }
+        { field.description && !fieldError && (
+          <Text as="p" variant="helper" className="credential-modal-description">
+            { renderDescription(field.description) }
+          </Text>
+        ) }
+      </div>
+    );
+  }
+
+  renderDropdown(field, id, value, fieldError, describedBy) {
+    const fieldKey = getFieldKey(field);
+
+    const choices = [
+      ...(field.optional ? [ { name: EMPTY_CHOICE_LABEL, value: '' } ] : []),
+      ...(field.choices || [])
+    ];
+
+    // select values must be non-empty strings, so use the choice index
+    const selectedIndex = choices.findIndex(choice => choice.value === value);
+
+    return (
+      <Select
+        value={ selectedIndex === -1 ? '' : String(selectedIndex) }
+        onValueChange={ index => this.handleFieldChange(fieldKey, choices[ index ].value) }
+      >
+        <SelectTrigger
+          id={ id }
+          aria-invalid={ fieldError ? 'true' : undefined }
+          aria-describedby={ describedBy }
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {
+            choices.map((choice, index) => (
+              <SelectItem key={ index } value={ String(index) }>{ choice.name }</SelectItem>
+            ))
+          }
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  render() {
+    const { loading, mode, onClose } = this.props;
+    const {
+      credentialName,
+      displayName,
+      submitting,
+      error
+    } = this.state;
+
+    const displayNameError = this.getDuplicateDisplayNameError();
+
+    return (
+      <Modal onClose={ submitting ? null : onClose }>
+
+        <Modal.Title>{ TITLES[ mode ] || TITLES.create }</Modal.Title>
+
+        <Modal.Body>
+          <div className={ css.credentialModal }>
+            { loading ? (
+              <div className="credential-modal-loading" role="status" aria-label="Loading credential">
+                <Loader />
+              </div>
+            ) : <>
+              <div
+                className="credential-modal-field"
+                data-invalid={ displayNameError ? '' : undefined }
+              >
+                <Label htmlFor="credential-display-name">Credential name</Label>
+                <Input
+                  id="credential-display-name"
+                  type="text"
+                  value={ displayName }
+                  aria-invalid={ displayNameError ? 'true' : undefined }
+                  aria-describedby={ displayNameError ? 'credential-display-name-error' : undefined }
+                  onChange={ this.handleDisplayNameChange }
+                />
+                { displayNameError && (
+                  <Text
+                    as="p"
+                    variant="helper"
+                    className="credential-modal-error"
+                    id="credential-display-name-error"
+                  >
+                    { displayNameError }
+                  </Text>
+                ) }
+                { credentialName && !displayNameError && (
+                  <Text as="p" variant="helper" className="credential-modal-description" id="credential-id-help">
+                    Referenced as <InlineCode>=camunda.vars.env.{ credentialName }</InlineCode>
+                  </Text>
+                ) }
+              </div>
+
+              { this.getVisibleFieldGroups().map(group => (
+                <section className="credential-modal-group" key={ group.id }>
+                  <Heading as="h3" variant="heading-xs">{ group.label }</Heading>
+                  { group.properties.map(field => this.renderField(field)) }
+                </section>
+              )) }
+
+              { error && <Alert variant="destructive" description={ error } /> }
+            </> }
+          </div>
+        </Modal.Body>
+
+        <Modal.Footer>
+          <Button variant="secondary" onClick={ onClose } disabled={ submitting }>
+            Cancel
+          </Button>
+          <Button onClick={ this.handleSubmit } disabled={ !this.canSubmit() }>
+            { SUBMIT_LABELS[ mode ] || SUBMIT_LABELS.edit }
+          </Button>
+        </Modal.Footer>
+      </Modal>
+    );
+  }
+}
+
+export default CredentialModal;
+
+
+// helpers //////////
+
+const ANCHOR_PATTERN = /<a\s+[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi;
+
+/**
+ * Render a configuration-template field description, turning `<a href>` links
+ * into real anchors. Only http(s) links are linkified; text is rendered by
+ * React and thus escaped, so no markup injects.
+ *
+ * @param {string} description
+ * @returns {Array<string|JSX.Element>}
+ */
+function renderDescription(description) {
+  const nodes = [];
+
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+
+  while ((match = ANCHOR_PATTERN.exec(description)) !== null) {
+    const [ full, href, text ] = match;
+
+    if (match.index > lastIndex) {
+      nodes.push(description.slice(lastIndex, match.index));
+    }
+
+    if (/^https?:\/\//i.test(href)) {
+      nodes.push(
+        <Link key={ key++ } href={ href } target="_blank" rel="noopener noreferrer">{ text }</Link>
+      );
+    } else {
+      nodes.push(text);
+    }
+
+    lastIndex = match.index + full.length;
+  }
+
+  if (lastIndex < description.length) {
+    nodes.push(description.slice(lastIndex));
+  }
+
+  return nodes;
+}
+
+/**
+ * Whether a field is one where a `camunda.secrets.<name>` reference is expected,
+ * i.e. not a `Dropdown` (its value is choice-constrained, not free text).
+ *
+ * @param {Object} field
+ *
+ * @returns {boolean}
+ */
+function isSecretField(field) {
+  return !!field.secret && field.type !== 'Dropdown';
+}
+
+/**
+ * A `camunda.secrets.<name>` occurrence. The name charset `[A-Za-z0-9_-]` mirrors
+ * the engine's (`[\p{Alnum}_-]+` restricted to ASCII), so detection agrees with
+ * resolution: any occurrence in the value is detected and substituted at runtime,
+ * literal surroundings included.
+ *
+ * The reference must start at a token boundary — a character outside the name
+ * charset and outside `.`, or the string start — so it is not matched inside
+ * another token: `foo.camunda.secrets.B` and `camunda.secrets.camunda.secrets.B`
+ * hold no reference beyond the first, while ` camunda.secrets.X ` does.
+ */
+const SECRET_REFERENCE_PATTERN = /(?:^|[^A-Za-z0-9_.])(camunda\.secrets\.[A-Za-z0-9_-]+)/g;
+
+/**
+ * Every `camunda.secrets.<name>` reference in the value, in order.
+ *
+ * @param {string} value
+ *
+ * @returns {string[]}
+ */
+function getSecretReferences(value) {
+  return [ ...value.matchAll(SECRET_REFERENCE_PATTERN) ].map(match => match[1]);
+}
+
+/**
+ * Whether a secret field's current value holds no complete `camunda.secrets.<name>`
+ * reference, i.e. is stored and resolved as plain text verbatim. Detection is a
+ * substring search mirroring the engine, which resolves references wherever they
+ * occur in a value: ` camunda.secrets.X ` still contains a resolvable reference
+ * and is not plain text. The bare prefix (`camunda.secrets.` with no name) is
+ * reported separately as an incomplete reference.
+ *
+ * @param {Object} field
+ * @param {string} value
+ *
+ * @returns {boolean}
+ */
+function isPlainTextSecretValue(field, value) {
+  return isSecretField(field)
+    && typeof value === 'string'
+    && value !== ''
+    && value !== SECRET_REFERENCE_PREFIX
+    && getSecretReferences(value).length === 0;
+}
+
+/**
+ * Whether a secret field's current value is the bare `camunda.secrets.` prefix,
+ * i.e. a reference without a name. The engine stores it verbatim, so it is
+ * flagged as incomplete rather than treated as a valid reference.
+ *
+ * @param {Object} field
+ * @param {string} value
+ *
+ * @returns {boolean}
+ */
+function isIncompleteSecretReference(field, value) {
+  return isSecretField(field)
+    && typeof value === 'string'
+    && value === SECRET_REFERENCE_PREFIX;
+}
+
+/**
+ * The first `camunda.secrets.<name>` reference missing from the cluster, or null
+ * when the value references no secret, every referenced secret exists, or the
+ * existence check is unavailable (`secretReferences` is not an array). Every
+ * occurrence is checked: the engine resolves all of them.
+ *
+ * @param {string} value
+ * @param {string[]|null} secretReferences
+ *
+ * @returns {string|null}
+ */
+function getMissingSecretReference(value, secretReferences) {
+  if (!Array.isArray(secretReferences) || typeof value !== 'string') {
+    return null;
+  }
+
+  return getSecretReferences(value).find(reference => !secretReferences.includes(reference)) ?? null;
+}

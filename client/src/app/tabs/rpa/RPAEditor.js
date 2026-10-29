@@ -20,12 +20,11 @@ import {
 import * as css from './RPAEditor.css';
 
 import {
-  debounce,
   isString
 } from 'min-dash';
 
 import { RPAEditor as RPACodeEditor, DebugInfo } from '@camunda/rpa-integration';
-import { Settings } from '@carbon/icons-react';
+import { Settings } from '@camunda/design-system/icons';
 
 import SidePanel from '../../side-panel/SidePanel';
 import PropertiesTab from '../../side-panel/tabs/PropertiesTab';
@@ -42,13 +41,14 @@ import {
 } from '../EngineProfile';
 
 import EngineProfileHelper from '../EngineProfileHelper';
+
+import LintingHelper from '../LintingHelper';
+
 import { ENGINES } from '../../../util/Engines';
 
 export const DEFAULT_ENGINE_PROFILE = {
   executionPlatform: ENGINES.CLOUD
 };
-
-export const LINTING_DEBOUNCE_WAIT = 500;
 
 
 export class RPAEditor extends CachedComponent {
@@ -64,7 +64,12 @@ export class RPAEditor extends CachedComponent {
     this.propertiesPanelRef = React.createRef();
 
     this.handleLayoutChange = this.handleLayoutChange.bind(this);
-    this.handleLinting = debounce(this.handleLinting.bind(this), LINTING_DEBOUNCE_WAIT);
+
+    this.linting = new LintingHelper({
+      lint: () => this.handleLinting(),
+      getCached: () => this.getCached(),
+      setCached: (state) => this.setCached(state)
+    });
 
     this.engineProfile = new EngineProfileHelper({
       get: () => {
@@ -83,22 +88,10 @@ export class RPAEditor extends CachedComponent {
           key: 'executionPlatformVersion',
           value: engineProfile.executionPlatformVersion
         });
-
-        const {
-          executionPlatform,
-          executionPlatformVersion
-        } = engineProfile;
-
-        this.props.onAction('emit-event', {
-          type: 'tab.engineProfileChanged',
-          payload: {
-            executionPlatform,
-            executionPlatformVersion
-          }
-        });
       },
       getCached: () => this.getCached(),
-      setCached: (state) => this.setCached(state)
+      setCached: (state) => this.setCached(state),
+      onChanged: (engineProfile) => this.emitEngineProfileChanged(engineProfile)
     });
   }
 
@@ -175,46 +168,18 @@ export class RPAEditor extends CachedComponent {
     this.setState({
       loading: false
     });
-    this.handleLinting();
+    this.linting.resume();
     this.props.onImport();
   }
 
   handleEngineProfile() {
-    let engineProfile = null;
-    let error = null;
-
     try {
-      engineProfile = this.engineProfile.get();
+      const engineProfile = this.engineProfile.get();
+
+      this.engineProfile.setCached(engineProfile);
     } catch (err) {
-      error = err;
-    }
-
-    const { engineProfile: cachedEngineProfile } = this.getCached();
-
-    if (engineProfile?.executionPlatformVersion === cachedEngineProfile?.executionPlatformVersion) {
-      return;
-    }
-
-    if (error) {
       this.setCached({
-        engineProfile: null,
-      });
-    } else {
-      this.setCached({
-        engineProfile,
-      });
-
-      const {
-        executionPlatform,
-        executionPlatformVersion
-      } = engineProfile;
-
-      this.props.onAction('emit-event', {
-        type: 'tab.engineProfileChanged',
-        payload: {
-          executionPlatform,
-          executionPlatformVersion
-        }
+        engineProfile: null
       });
     }
   }
@@ -278,6 +243,8 @@ export class RPAEditor extends CachedComponent {
   }
 
   componentWillUnmount() {
+    this.linting.cancel();
+
     const {
       editorContainer,
       propertiesContainer,
@@ -379,6 +346,18 @@ export class RPAEditor extends CachedComponent {
     return isXMLChange(editor.getValue(), lastXML);
   }
 
+  emitEngineProfileChanged = (engineProfile) => {
+    const {
+      executionPlatform,
+      executionPlatformVersion
+    } = engineProfile;
+
+    this.props.emit('tab.engineProfileChanged', {
+      executionPlatform,
+      executionPlatformVersion
+    });
+  };
+
   handleChanged = () => {
     const {
       onChanged
@@ -435,7 +414,7 @@ export class RPAEditor extends CachedComponent {
 
     this.handleEngineProfile();
 
-    this.handleLinting();
+    this.linting.schedule();
   };
 
   handleLayoutChange(newLayout) {

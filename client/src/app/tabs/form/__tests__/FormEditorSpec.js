@@ -728,23 +728,46 @@ describe('<FormEditor>', function() {
     it('should emit tab.engineProfileChanged event on import', async function() {
 
       // given
-      const onActionSpy = spy();
+      const emitSpy = spy();
 
       // when
       await renderEditor(engineProfileSchema, {
-        onAction: onActionSpy
+        emit: emitSpy
       });
 
       // then
       await waitFor(() => {
-        expect(onActionSpy).to.have.been.calledWithMatch('emit-event', {
-          type: 'tab.engineProfileChanged',
-          payload: {
-            executionPlatform: 'Camunda Platform',
-            executionPlatformVersion: '7.16.0'
-          }
+        expect(emitSpy).to.have.been.calledWithMatch('tab.engineProfileChanged', {
+          executionPlatform: 'Camunda Platform',
+          executionPlatformVersion: '7.16.0'
         });
       });
+    });
+
+
+    it('should NOT emit tab.engineProfileChanged event when engine profile unchanged', async function() {
+
+      // given
+      const emitSpy = spy();
+
+      const { instance } = await renderEditor(engineProfileSchema, {
+        emit: emitSpy
+      });
+
+      await waitFor(() => {
+        expect(emitSpy).to.have.been.calledWith('tab.engineProfileChanged');
+      });
+
+      emitSpy.resetHistory();
+
+      // when
+      instance.engineProfile.setCached({
+        executionPlatform: 'Camunda Platform',
+        executionPlatformVersion: '7.16.0'
+      });
+
+      // then
+      expect(emitSpy).not.to.have.been.calledWith('tab.engineProfileChanged');
     });
 
 
@@ -1034,8 +1057,8 @@ describe('<FormEditor>', function() {
     beforeEach(function() {
       emittedEvents = [];
 
-      recordActions = (action, options) => {
-        emittedEvents.push(options);
+      recordActions = (type, payload) => {
+        emittedEvents.push({ type, payload });
       };
     });
 
@@ -1046,7 +1069,7 @@ describe('<FormEditor>', function() {
       const {
         instance
       } = await renderEditor(engineProfileSchema, {
-        onAction: recordActions
+        emit: recordActions
       });
 
       const {
@@ -1071,7 +1094,7 @@ describe('<FormEditor>', function() {
       const {
         instance
       } = await renderEditor(schema, {
-        onAction: recordActions
+        emit: recordActions
       });
 
       const {
@@ -1110,7 +1133,7 @@ describe('<FormEditor>', function() {
       const {
         instance
       } = await renderEditor(schema, {
-        onAction: recordActions
+        emit: recordActions
       });
 
       const layout = {
@@ -1166,7 +1189,7 @@ describe('<FormEditor>', function() {
         container
       } = await renderEditor(engineProfileSchema, {
         cache,
-        onAction: recordActions
+        emit: recordActions
       });
 
       const previewContainer = container.querySelector('.cfp-preview-container');
@@ -1188,7 +1211,7 @@ describe('<FormEditor>', function() {
       const {
         container
       } = await renderEditor(engineProfileSchema, {
-        onAction: recordActions
+        emit: recordActions
       });
 
       const previewContainer = container.querySelector('.cfp-preview-container');
@@ -1225,7 +1248,7 @@ describe('<FormEditor>', function() {
         container
       } = await renderEditor(engineProfileSchema, {
         cache,
-        onAction: recordActions
+        emit: recordActions
       });
 
       // when
@@ -1264,7 +1287,7 @@ describe('<FormEditor>', function() {
         container
       } = await renderEditor(engineProfileSchema, {
         cache,
-        onAction: recordActions
+        emit: recordActions
       });
 
       const dataContainer = container.querySelector('.cfp-data-container');
@@ -1286,7 +1309,7 @@ describe('<FormEditor>', function() {
       const {
         container
       } = await renderEditor(engineProfileSchema, {
-        onAction: recordActions
+        emit: recordActions
       });
 
       const dataContainer = container.querySelector('.cfp-data-container');
@@ -1323,7 +1346,7 @@ describe('<FormEditor>', function() {
         container
       } = await renderEditor(engineProfileSchema, {
         cache,
-        onAction: recordActions
+        emit: recordActions
       });
 
       // when
@@ -1358,6 +1381,7 @@ async function renderEditor(schema, options = {}) {
     id = 'editor',
     layout = {},
     onAction = noop,
+    emit = noop,
     onChanged = noop,
     onContentUpdated = noop,
     onError = noop,
@@ -1389,6 +1413,7 @@ async function renderEditor(schema, options = {}) {
           id={ id }
           layout={ layout }
           onAction={ onAction }
+          emit={ emit }
           onChanged={ onChanged }
           onContentUpdated={ onContentUpdated }
           onError={ onError }

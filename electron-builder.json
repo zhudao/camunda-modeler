@@ -12,12 +12,11 @@
     }
   ],
   "afterPack": "./tasks/after-pack.js",
-  "afterSign": "./tasks/after-sign.mjs",
   "win": {
     "target": [
       {
         "target": "zip",
-        "arch": [ "x64", "ia32" ]
+        "arch": [ "x64" ]
       }
     ]
   },

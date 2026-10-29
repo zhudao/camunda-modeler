@@ -1,0 +1,13 @@
+:local(.ElementTemplatesSettings) {
+
+  /* align the documentation icon like in field labels */
+  .source-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .flag-warning {
+    margin-bottom: 16px;
+  }
+}

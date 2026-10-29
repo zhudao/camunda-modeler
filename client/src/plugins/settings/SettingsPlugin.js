@@ -12,15 +12,17 @@ import React, { useEffect, useState } from 'react';
 
 import { forEach, debounce, map, reduce } from 'min-dash';
 
-import { omitBy } from 'lodash';
+import { isEqual, omitBy } from 'lodash';
 
 import { Formik } from 'formik';
 
 import debug from 'debug';
 
+import { Button, Link } from '@camunda/design-system';
+
 import Flags from '../../util/Flags';
 
-import { Modal } from '../../shared/ui';
+import { Modal, Notice } from '../../shared/ui';
 
 import { SettingsForm } from './SettingsForm';
 
@@ -44,6 +46,7 @@ export default function SettingsPlugin(props) {
   const {
     subscribe,
     triggerAction,
+    emit,
     _getGlobal
   } = props;
 
@@ -110,7 +113,7 @@ export default function SettingsPlugin(props) {
   const handleSave = (data) => {
     const formikValues = flattenFormikValues(data);
 
-    const changedValues = omitBy(formikValues, (value, key) => values[key] === value);
+    const changedValues = omitBy(formikValues, (value, key) => isEqual(values[key], value));
 
     if (!Object.keys(changedValues).length) {
       return;
@@ -134,7 +137,7 @@ export default function SettingsPlugin(props) {
   };
 
   const handleClose = () => {
-    triggerAction('emit-event', { type: 'settings.closed' });
+    emit('settings.closed');
     setOpen(false);
   };
 
@@ -144,16 +147,18 @@ export default function SettingsPlugin(props) {
 
   return (
     <Modal adaptive={ true } onClose={ handleClose }>
-      <div className="modal-header">
-        <h2 className="modal-title">Settings</h2>
-      </div>
-      <div className={ `${css.SettingsPlugin} modal-body` }>
+      <Modal.Title>Settings</Modal.Title>
 
-        {showRestartWarning &&
-          <div className="restart-warning">Restart the modeler to apply the changes.&nbsp;
-            <button className="btn-restart" onClick={ handleRestart }>Restart now.</button>
-          </div>
-        }
+      {showRestartWarning &&
+        <Notice type="warning">
+          Restart the modeler to apply the changes.{ ' ' }
+          <Link asChild>
+            <button type="button" onClick={ handleRestart }>Restart now.</button>
+          </Link>
+        </Notice>
+      }
+
+      <Modal.Body className={ css.SettingsPlugin }>
 
         <Formik
           initialValues={ unflattenValues(values) }
@@ -166,16 +171,16 @@ export default function SettingsPlugin(props) {
           />
         </Formik>
 
-      </div>
-      <div className="modal-footer">
-        <button
-          className="btn btn-secondary"
+      </Modal.Body>
+      <Modal.Footer>
+        <Button
+          variant="secondary"
           type="button"
           onClick={ handleClose }
         >
           Done
-        </button>
-      </div>
+        </Button>
+      </Modal.Footer>
     </Modal>
   );
 }

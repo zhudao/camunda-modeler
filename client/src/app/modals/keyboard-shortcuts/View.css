@@ -1,17 +1,25 @@
 :local(.View) {
-  font-size: 1.2em;
 
-  .binding {
-    padding: 5px 10px;
-    font-family: var(--font-family-monospace);
+  .shortcut-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 
-    code {
-      font-family: inherit;
+    h3 {
+      margin: 0;
+    }
+
+    table {
+      table-layout: fixed;
+    }
+
+    td {
+      width: 50%;
     }
   }
 
-  .buttonDiv {
-    text-align: right;
-    margin-top: 10px;
+  /* 24px between groups: the body gap (16px) plus 8px */
+  .shortcut-group + .shortcut-group {
+    margin-top: 8px;
   }
 }

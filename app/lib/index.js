@@ -33,19 +33,20 @@ const Flags = require('./flags');
 const Log = require('./log');
 const logTransports = require('./log/transports');
 const Menu = require('./menu');
+const OpenFileHandler = require('./open-file-handler');
 const Platform = require('./platform');
 const Plugins = require('./plugins');
 const WindowManager = require('./window-manager');
 const Workspace = require('./workspace');
 const ZeebeAPI = require('./zeebe-api');
-const { getTemplatesPath } = require('./template-updater/util');
-const { TemplateUpdater, OOTB_CONNECTORS_ENDPOINT } = require('./template-updater/template-updater');
+const { getTemplateSourceConfig } = require('./template-updater/sources');
+const { TemplateUpdater } = require('./template-updater/template-updater');
 
 const FileContext = require('./file-context/file-context');
 const { toFileUrl } = require('./file-context/util');
 const {
-  findProcessApplicationFile,
-  isProcessApplicationFile
+  findCamundaProjectFile,
+  isCamundaProjectFile
 } = require('./file-context/processors/util');
 
 const {
@@ -88,10 +89,11 @@ const {
   config,
   dialog,
   fileContext,
-  files,
   flags,
   menu,
+  openFileHandler,
   plugins,
+  cleanupTemplateSourcesCache,
   windowManager,
   zeebeAPI
 } = bootstrap();
@@ -245,10 +247,10 @@ renderer.on('file-context:file-opened', function(filePath, options, done) {
 
   fileContext.fileOpened(fileUrl, options);
 
-  const processApplicationFile = findProcessApplicationFile(filePath);
+  const camundaProjectFile = findCamundaProjectFile(filePath);
 
-  if (processApplicationFile) {
-    fileContext.addRoot(path.dirname(processApplicationFile));
+  if (camundaProjectFile) {
+    fileContext.addRoot(path.dirname(camundaProjectFile));
   }
 
   done(null);
@@ -263,11 +265,11 @@ renderer.on('file-context:file-updated', function(filePath, options, done) {
 renderer.on('file-context:file-closed', function(filePath, done) {
   const fileUrl = toFileUrl(filePath);
 
-  const processApplicationFile = fileContext._indexer.getItems().find((item) => {
-    return path.dirname(filePath).startsWith(path.dirname(item.file.path)) && isProcessApplicationFile(item.file.path);
+  const camundaProjectFile = fileContext._indexer.getItems().find((item) => {
+    return path.dirname(filePath).startsWith(path.dirname(item.file.path)) && isCamundaProjectFile(item.file.path);
   });
 
-  if (!processApplicationFile) {
+  if (!camundaProjectFile) {
     fileContext.fileClosed(fileUrl);
   }
 
@@ -414,6 +416,76 @@ renderer.on('zeebe:searchUserTasks', async function(options, done) {
   }
 });
 
+renderer.on('zeebe:getAuthorizations', async function(options, done) {
+  try {
+    const getAuthorizationsResponse = await zeebeAPI.getAuthorizations(options);
+
+    done(null, getAuthorizationsResponse);
+  } catch (err) {
+    done(err);
+  }
+});
+
+renderer.on('zeebe:evaluateExpression', async function(options, done) {
+  try {
+    const evaluateExpressionResponse = await zeebeAPI.evaluateExpression(options);
+
+    done(null, evaluateExpressionResponse);
+  } catch (err) {
+    done(err);
+  }
+});
+
+renderer.on('zeebe:searchClusterVariables', async function(options, done) {
+  try {
+    const searchClusterVariablesResponse = await zeebeAPI.searchClusterVariables(options);
+
+    done(null, searchClusterVariablesResponse);
+  } catch (err) {
+    done(err);
+  }
+});
+
+renderer.on('zeebe:getClusterVariable', async function(options, done) {
+  try {
+    const getClusterVariableResponse = await zeebeAPI.getClusterVariable(options);
+
+    done(null, getClusterVariableResponse);
+  } catch (err) {
+    done(err);
+  }
+});
+
+renderer.on('zeebe:createClusterVariable', async function(options, done) {
+  try {
+    const createClusterVariableResponse = await zeebeAPI.createClusterVariable(options);
+
+    done(null, createClusterVariableResponse);
+  } catch (err) {
+    done(err);
+  }
+});
+
+renderer.on('zeebe:updateClusterVariable', async function(options, done) {
+  try {
+    const updateClusterVariableResponse = await zeebeAPI.updateClusterVariable(options);
+
+    done(null, updateClusterVariableResponse);
+  } catch (err) {
+    done(err);
+  }
+});
+
+renderer.on('zeebe:listSecrets', async function(options, done) {
+  try {
+    const listSecretsResponse = await zeebeAPI.listSecrets(options);
+
+    done(null, listSecretsResponse);
+  } catch (err) {
+    done(err);
+  }
+});
+
 // config //////////
 
 renderer.on('config:get', function(key, ...args) {
@@ -455,11 +527,6 @@ renderer.on('toggle-plugins', function() {
 
 app.on('app:client-ready', function() {
   bootstrapLog.info('received client-ready');
-
-  // open pending files
-  if (files.length) {
-    app.openFiles(files);
-  }
 
   renderer.send('client:started');
 });
@@ -540,28 +607,9 @@ app.on('web-contents-created', (event, webContents) => {
  * @param {Array<string>} filePaths
  */
 app.openFiles = function(filePaths) {
-
   log.info('open files', filePaths);
 
-  if (!app.clientReady) {
-
-    // defer file open
-    return files.push(...filePaths);
-  }
-
-  const existingFiles = filePaths.map(filePath => {
-
-    try {
-      return readFile(filePath);
-    } catch (e) {
-      dialog.showOpenFileErrorDialog({
-        name: path.basename(filePath)
-      });
-    }
-  }).filter(f => f);
-
-  // open files
-  renderer.send('client:open-files', existingFiles);
+  openFileHandler.open(filePaths);
 };
 
 /**
@@ -613,6 +661,10 @@ app.createEditorWindow = function() {
     log.info('initating close of main window');
 
     if (app.quitAllowed) {
+
+      // reset file context, as the next window session
+      // will re-index files it opens on its own
+      fileContext.reset();
 
       // dereferencing main window and resetting client state
       app.mainWindow = null;
@@ -675,6 +727,8 @@ app.on('restart', function(args) {
 app.on('ready', function() {
 
   bootstrapLog.info('received ready');
+
+  cleanupTemplateSourcesCache();
 
   menu.registerMenuProvider('plugins', {
     plugins: plugins.getAll()
@@ -789,11 +843,8 @@ function bootstrap() {
   });
 
   // (3) config
-  const ignoredPaths = [];
-
-  if (isConnectorTemplatesDisabled(flags, userPath)) {
-    ignoredPaths.push(getTemplatesPath(userPath, OOTB_CONNECTORS_ENDPOINT.fileName));
-  }
+  const settings = new Config({ userPath }).get('settings');
+  const { endpoints, ignoredPaths, cleanupTemplateSourcesCache } = getTemplateSourceConfig({ userPath, settings, flags });
 
   const config = new Config({
     appPath,
@@ -854,7 +905,7 @@ function bootstrap() {
   const zeebeAPI = new ZeebeAPI({ readFile }, Camunda8, flags);
 
   // (10) template updater
-  const templateUpdater = new TemplateUpdater(userPath, isConnectorTemplatesDisabled(flags, userPath) ? [] : [ OOTB_CONNECTORS_ENDPOINT ]);
+  const templateUpdater = new TemplateUpdater(userPath, endpoints);
 
   templateUpdater.on('update:done', (hasNew, warnings) => {
     renderer.send('client:templates-update-done', hasNew, warnings);
@@ -891,14 +942,28 @@ function bootstrap() {
 
   app.on('quit', () => fileContext.close());
 
+  // (12) open file handler
+  const openFileHandler = OpenFileHandler({
+    app,
+    readFile,
+    onError: (filePath) => dialog.showOpenFileErrorDialog({
+      name: path.basename(filePath)
+    }),
+    renderer
+  });
+
+  // queue files passed via CLI; opened once the client is ready
+  openFileHandler.open(files);
+
   return {
     config,
     dialog,
     fileContext,
-    files,
     flags,
     menu,
+    openFileHandler,
     plugins,
+    cleanupTemplateSourcesCache,
     windowManager,
     zeebeAPI
   };
@@ -922,15 +987,6 @@ function setUserPath(path = DEFAULT_USER_PATH) {
   app.setPath('userData', path);
 }
 
-function isConnectorTemplatesDisabled(flags, userPath) {
-
-  // TODO(@barmac): use bootstrapped config or extract settings to a separate module
-  const settings = new Config({ userPath }).get('settings');
-
-  return (
-    flags.get('disable-connector-templates', false) || settings['app.disableConnectorTemplates']
-  );
-}
 
 function arePluginsDisabled(flags, config) {
   const settings = config.get('settings');

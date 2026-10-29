@@ -11,7 +11,7 @@
 import { expect } from 'chai';
 import React from 'react';
 
-import TestRenderer from 'react-test-renderer';
+import { render } from '@testing-library/react';
 
 import PluginsRoot from '../PluginsRoot';
 
@@ -28,6 +28,7 @@ describe('<PluginsRoot>', function() {
       plugins: [
         props => {
           expect(props.triggerAction).to.exist;
+          expect(props.emit).to.exist;
           expect(props.config).to.exist;
           expect(props.getConfig).to.exist;
           expect(props.setConfig).to.exist;
@@ -53,7 +54,7 @@ function createPluginsRoot(props = {}) {
     plugins: []
   };
 
-  return TestRenderer.create(<PluginsRoot { ...{ ...defaultProps, ...props } } />);
+  return render(<PluginsRoot { ...{ ...defaultProps, ...props } } />);
 }
 
 class App {
@@ -72,6 +73,8 @@ class App {
   };
 
   triggerAction = () => {};
+
+  emitEvent = () => {};
 }
 
 class Config {

@@ -51,17 +51,17 @@ describe('<Modal>', function() {
 
     it('should render close icon if onClose existent', function() {
 
-      const { getByLabelText } = render(<Modal onClose={ () => {} } />);
+      const { getByRole } = render(<Modal onClose={ () => {} } />);
 
-      expect(getByLabelText('Close')).to.exist;
+      expect(getByRole('button', { name: 'Close' })).to.exist;
     });
 
 
     it('should not render close icon if onClose not set', function() {
 
-      const { queryByLabelText } = render(<Modal />);
+      const { queryByRole } = render(<Modal />);
 
-      expect(queryByLabelText('Close')).to.not.exist;
+      expect(queryByRole('button', { name: 'Close' })).to.not.exist;
     });
   });
 
@@ -106,6 +106,96 @@ describe('<Modal>', function() {
       expect(onCloseSpy).to.not.be.called;
     });
 
+
+    it('should invoke passed onClose prop on Escape', function() {
+
+      // given
+      const { getByRole } = render(<Modal onClose={ onCloseSpy } />);
+
+      // when
+      fireEvent.keyDown(getByRole('dialog'), { key: 'Escape' });
+
+      // then
+      expect(onCloseSpy).to.have.been.calledOnce;
+    });
+
+
+    it('should invoke passed onClose prop on close button click', function() {
+
+      // given
+      const { getByRole } = render(<Modal onClose={ onCloseSpy } />);
+
+      // when
+      fireEvent.click(getByRole('button', { name: 'Close' }));
+
+      // then
+      expect(onCloseSpy).to.have.been.calledOnce;
+    });
+
+  });
+
+
+  describe('nested modals', function() {
+
+    it('should close only the topmost modal on Escape', function() {
+
+      // given
+      const outerClose = sinon.spy();
+      const innerClose = sinon.spy();
+
+      const { rerender } = render(<Modal onClose={ outerClose } />);
+
+      rerender(<>
+        <Modal onClose={ outerClose } />
+        <Modal onClose={ innerClose } />
+      </>);
+
+      // when
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      // then
+      expect(innerClose).to.have.been.calledOnce;
+      expect(outerClose).not.to.have.been.called;
+
+      // when
+      rerender(<Modal onClose={ outerClose } />);
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      // then
+      expect(outerClose).to.have.been.calledOnce;
+    });
+
+
+    it('should keep focus in the topmost modal', function() {
+
+      // given
+      const { rerender, getByTestId } = render(<Modal>
+        <input data-testid="outer" />
+      </Modal>);
+
+      rerender(<>
+        <Modal>
+          <input data-testid="outer" />
+        </Modal>
+        <Modal>
+          <input data-testid="inner-1" />
+          <input data-testid="inner-2" />
+        </Modal>
+      </>);
+
+      const inner1 = getByTestId('inner-1');
+      const inner2 = getByTestId('inner-2');
+
+      inner1.focus();
+
+      // when
+      fireEvent.keyDown(document, { key: 'Tab' });
+      inner2.focus();
+
+      // then
+      expect(document.activeElement).to.equal(inner2);
+    });
+
   });
 
 
@@ -129,12 +219,35 @@ describe('<Modal>', function() {
   });
 
 
+  it('should not submit an enclosing form', function() {
+
+    // given
+    const outerSubmit = sinon.spy();
+    const innerSubmit = sinon.spy(event => event.preventDefault());
+
+    const { getByRole } = render(<form onSubmit={ outerSubmit }>
+      <Modal>
+        <form onSubmit={ innerSubmit }>
+          <button type="submit">Submit</button>
+        </form>
+      </Modal>
+    </form>);
+
+    // when
+    fireEvent.submit(getByRole('button', { name: 'Submit' }).closest('form'));
+
+    // then
+    expect(innerSubmit).to.have.been.calledOnce;
+    expect(outerSubmit).not.to.have.been.called;
+  });
+
+
   describe('<Modal.Title>', function() {
 
     it('should render', function() {
-      const { container } = render(<Modal.Title />);
+      render(<Modal><Modal.Title /></Modal>);
 
-      expect(container.querySelector('.modal-header')).to.exist;
+      expect(document.querySelector('[data-slot="dialog-header"]')).to.exist;
     });
 
 
@@ -144,9 +257,9 @@ describe('<Modal>', function() {
       const onClickSpy = sinon.spy();
 
       // when
-      const { container } = render(<Modal.Title className="foo" onClick={ onClickSpy } />);
+      render(<Modal><Modal.Title className="foo" onClick={ onClickSpy } /></Modal>);
 
-      const header = container.querySelector('.modal-header');
+      const header = document.querySelector('[data-slot="dialog-header"]');
       fireEvent.click(header);
 
       // then
@@ -162,7 +275,7 @@ describe('<Modal>', function() {
     it('should render', function() {
       const { container } = render(<Modal.Body />);
 
-      expect(container.querySelector('.modal-body')).to.exist;
+      expect(container.querySelector('[data-slot="dialog-body"]')).to.exist;
     });
 
 
@@ -174,7 +287,7 @@ describe('<Modal>', function() {
       // when
       const { container } = render(<Modal.Body className="foo" onClick={ onClickSpy } />);
 
-      const body = container.querySelector('.modal-body');
+      const body = container.querySelector('[data-slot="dialog-body"]');
       fireEvent.click(body);
 
       // then
@@ -190,7 +303,7 @@ describe('<Modal>', function() {
     it('should render', function() {
       const { container } = render(<Modal.Footer />);
 
-      expect(container.querySelector('.modal-footer')).to.exist;
+      expect(container.querySelector('[data-slot="dialog-footer"]')).to.exist;
     });
 
 
@@ -202,7 +315,7 @@ describe('<Modal>', function() {
       // when
       const { container } = render(<Modal.Footer className="foo" onClick={ onClickSpy } />);
 
-      const footer = container.querySelector('.modal-footer');
+      const footer = container.querySelector('[data-slot="dialog-footer"]');
       fireEvent.click(footer);
 
       // then

@@ -8,6 +8,7 @@
  * except in compliance with the MIT License.
  */
 
+import '@camunda/design-system/styles.css';
 import './styles/style.css';
 
 import { flags, globals, metadata, plugins } from './globals';
@@ -48,11 +49,6 @@ const keyboardBindings = new KeyboardBindings({
 
 
 async function render() {
-
-  if (process.env.NODE_ENV !== 'production') {
-    const { loadA11yHelper } = await import('./util/a11y');
-    await loadA11yHelper();
-  }
 
   // load plugins
   plugins.bindHelpers(window);

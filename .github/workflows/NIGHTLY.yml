@@ -24,15 +24,17 @@ jobs:
           - 'dist/camunda-modeler-nightly-mac-x64.zip'
         - os: windows-2022
           files:
-          - 'dist/camunda-modeler-nightly-win-ia32.zip'
           - 'dist/camunda-modeler-nightly-win-x64.zip'
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write # Vault OIDC/JWT auth
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
     - name: Use Node.js
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@v7
       with:
         node-version: 24
         cache: 'npm'
@@ -43,9 +45,10 @@ jobs:
       uses: hashicorp/vault-action@v4.0.0
       with:
         url: ${{ secrets.VAULT_ADDR }}
-        method: approle
-        roleId: ${{ secrets.VAULT_ROLE_ID }}
-        secretId: ${{ secrets.VAULT_SECRET_ID }}
+        method: jwt
+        role: ${{ secrets.VAULT_JWT_ROLE }}
+        path: ${{ secrets.VAULT_JWT_PATH }}
+        jwtGithubAudience: ${{ secrets.VAULT_JWT_AUDIENCE }}
         exportEnv: false
         secrets: |
           secret/data/products/desktop-modeler/ci/sentry SENTRY_AUTH_TOKEN;
@@ -60,9 +63,10 @@ jobs:
       uses: hashicorp/vault-action@v4.0.0
       with:
         url: ${{ secrets.VAULT_ADDR }}
-        method: approle
-        roleId: ${{ secrets.VAULT_ROLE_ID }}
-        secretId: ${{ secrets.VAULT_SECRET_ID }}
+        method: jwt
+        role: ${{ secrets.VAULT_JWT_ROLE }}
+        path: ${{ secrets.VAULT_JWT_PATH }}
+        jwtGithubAudience: ${{ secrets.VAULT_JWT_AUDIENCE }}
         exportEnv: false
         secrets: |
           secret/data/products/rpa/ci/azure             CERT_PROFILE_NAME  | AZURE_CERT_PROFILE_NAME ;
@@ -78,8 +82,6 @@ jobs:
       env:
         CSC_LINK: "${{ secrets.CSC_LINK }}"
         CSC_KEY_PASSWORD: "${{ secrets.CSC_KEY_PASSWORD }}"
-        MIXPANEL_TOKEN: "${{ secrets.MIXPANEL_PROJECT_TOKEN }}"
-        MIXPANEL_STAGE: "int"
         NIGHTLY: 1
         SENTRY_AUTH_TOKEN: "${{ steps.secrets.outputs.SENTRY_AUTH_TOKEN }}"
         SENTRY_DSN: "${{ steps.secrets.outputs.SENTRY_DSN }}"
@@ -91,13 +93,11 @@ jobs:
     - name: Build nightly (MacOS)
       if: ${{ runner.os == 'macOS' }}
       env:
-        APPLE_DEVELOPER_ID: "${{ secrets.APPLE_DEVELOPER_ID }}"
-        APPLE_DEVELOPER_ID_PASSWORD: "${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}"
+        APPLE_ID: "${{ secrets.APPLE_DEVELOPER_ID }}"
+        APPLE_APP_SPECIFIC_PASSWORD: "${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}"
         APPLE_TEAM_ID: "${{ secrets.APPLE_TEAM_ID }}"
         CSC_LINK: "${{ secrets.CSC_LINK }}"
         CSC_KEY_PASSWORD: "${{ secrets.CSC_KEY_PASSWORD }}"
-        MIXPANEL_TOKEN: "${{ secrets.MIXPANEL_PROJECT_TOKEN }}"
-        MIXPANEL_STAGE: "int"
         NIGHTLY: 1
         SENTRY_AUTH_TOKEN: "${{ steps.secrets.outputs.SENTRY_AUTH_TOKEN }}"
         SENTRY_DSN: "${{ steps.secrets.outputs.SENTRY_DSN }}"
@@ -116,8 +116,6 @@ jobs:
         AZURE_ENDPOINT: "${{ steps.windowsSecrets.outputs.AZURE_ENDPOINT }}"
         AZURE_PUBLISHER_NAME: "${{ steps.windowsSecrets.outputs.AZURE_PUBLISHER_NAME }}"
         AZURE_TENANT_ID: "${{ steps.windowsSecrets.outputs.AZURE_TENANT_ID }}"
-        MIXPANEL_TOKEN: "${{ secrets.MIXPANEL_PROJECT_TOKEN }}"
-        MIXPANEL_STAGE: "int"
         NIGHTLY: 1
         SENTRY_AUTH_TOKEN: "${{ steps.secrets.outputs.SENTRY_AUTH_TOKEN }}"
         SENTRY_DSN: "${{ steps.secrets.outputs.SENTRY_DSN }}"
@@ -139,21 +137,24 @@ jobs:
     needs: build_nightly
     if: failure()
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Vault OIDC/JWT auth
     steps:
     - name: Import Secrets
       id: secrets
       uses: hashicorp/vault-action@v4.0.0
       with:
         url: ${{ secrets.VAULT_ADDR }}
-        method: approle
-        roleId: ${{ secrets.VAULT_ROLE_ID }}
-        secretId: ${{ secrets.VAULT_SECRET_ID }}
+        method: jwt
+        role: ${{ secrets.VAULT_JWT_ROLE }}
+        path: ${{ secrets.VAULT_JWT_PATH }}
+        jwtGithubAudience: ${{ secrets.VAULT_JWT_AUDIENCE }}
         exportEnv: false
         secrets: |
           secret/data/products/desktop-modeler/ci/slack_integration SLACK_CHANNEL_ID;
           secret/data/products/desktop-modeler/ci/slack_integration SLACK_BOT_TOKEN;
     - name: Post to a Slack channel
-      uses: slackapi/slack-github-action@v3
+      uses: slackapi/slack-github-action@v4
       with:
         method: chat.postMessage
         token: ${{ steps.secrets.outputs.SLACK_BOT_TOKEN }}
