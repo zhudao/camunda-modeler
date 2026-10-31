@@ -19,8 +19,9 @@ ___Note:__ Yet to be released changes appear here._
 * `FIX`: cancel active drag on listener error ([bpmn-io/diagram-js#961](https://github.com/bpmn-io/diagram-js/issues/961))
 * `FIX`: display documentation link in the popup menu bottom when keyboard is used ([bpmn-io/diagram-js#1103](https://github.com/bpmn-io/diagram-js/issues/1103))
 * `FIX`: prevent overflowing and looping of text when layouting it ([bpmn-io/diagram-js#1106](https://github.com/bpmn-io/diagram-js/pull/1106), [bpmn-io/diagram-js#1105](https://github.com/bpmn-io/diagram-js/pull/1105))
+* `FIX`: open the project deployment and start instance overlays after saving a file into a project ([#6301](https://github.com/camunda/camunda-modeler/issues/6301))
 * `DEPS`: remove Mixpanel ([#6259](https://github.com/camunda/camunda-modeler/issues/6259))
-* `DEPS`: add `@bpmn-io/c4-theme@0.3.2`
+* `DEPS`: add `@bpmn-io/c4-theme@0.3.3`
 * `DEPS`: update to `@bpmn-io/form-js@2.1.1`
 * `DEPS`: update to `@bpmn-io/properties-panel@3.58.0`
 * `DEPS`: update to `@bpmn-io/variable-outline@4.0.1`
@@ -42,7 +43,7 @@ ___Note:__ Yet to be released changes appear here._
 * `DEPS`: update to `@sentry/electron@8.2.0`
 * `DEPS`: update to `@uiw/codemirror-theme-vscode@4.25.12`
 * `DEPS`: update to `bpmn-js@18.31.1`
-* `DEPS`: update to `bpmn-js-element-templates@2.40.1`
+* `DEPS`: update to `bpmn-js-element-templates@2.40.2`
 * `DEPS`: update to `bpmn-js-properties-panel@5.65.3`
 * `DEPS`: update to `camunda-bpmn-js@5.38.0`
 * `DEPS`: update to `camunda-bpmn-moddle@8.0.2`
@@ -91,7 +92,7 @@ ___Note:__ Yet to be released changes appear here._
 * `FIX`: mark checkbox entries with errors in the properties panel ([bpmn-io/properties-panel#554](https://github.com/bpmn-io/properties-panel/pull/554))
 * `FIX`: show the most severe element template lint error, not the first one ([bpmn-io/properties-panel#554](https://github.com/bpmn-io/properties-panel/pull/554))
 * `FIX`: show linting errors over local validation errors in element template entries, like in all other entries ([bpmn-io/properties-panel#554](https://github.com/bpmn-io/properties-panel/pull/554))
-* `FIX`: convert empty optional FEEL number fields to FEEL on `=` key press ([bpmn-io/properties-panel#559](https://github.com/bpmn-io/properties-panel/pull/559))
+* `FIX`: convert empty optional FEEL number fields to FEEL on `=` key press ([bpmn-io/properties-panel#559](https://github.com/bpmn-io/properties-panel/pull/559), [bpmn-io/bpmn-js-element-templates#311](https://github.com/bpmn-io/bpmn-js-element-templates/pull/311))
 * `FIX`: keep correlation key of message start event in event sub-process when its label moves ([#6276](https://github.com/camunda/camunda-modeler/issues/6276))
 * `FIX`: validate correlation key constraints of message start event in event sub-process ([#6276](https://github.com/camunda/camunda-modeler/issues/6276))
 * `FIX`: do not report property names after an index access as consumed variables ([bpmn-io/variable-resolver#130](https://github.com/bpmn-io/variable-resolver/pull/130))
